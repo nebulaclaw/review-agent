@@ -1,5 +1,6 @@
 import threading
-from typing import Dict, Optional
+from pathlib import Path
+from typing import Dict, Iterable, List, Optional
 
 from langchain_core.chat_history import InMemoryChatMessageHistory
 from langchain_core.documents import Document
@@ -146,6 +147,54 @@ class UnifiedMemory:
 _sessions_lock = threading.Lock()
 _sessions: Dict[str, UnifiedMemory] = {}
 
+_staging_lock = threading.Lock()
+# Server-side paths from /v1/review/file kept until session DELETE (multi-turn re-analysis).
+_session_review_staging_paths: Dict[str, List[str]] = {}
+
+
+def _unlink_review_staging_paths(paths: Iterable[str]) -> None:
+    for tmp_path in paths:
+        try:
+            p = Path(tmp_path)
+            if p.exists():
+                p.unlink()
+            parent = p.parent
+            if parent.name.startswith("review_upload_"):
+                parent.rmdir()
+        except OSError:
+            pass
+
+
+def register_session_review_staging_paths(session_id: str, paths: List[str]) -> None:
+    """Replace any prior staged uploads for this session, then own ``paths`` until cleared."""
+    sid = str(session_id).strip()
+    if not sid:
+        return
+    with _staging_lock:
+        prev = _session_review_staging_paths.pop(sid, None)
+    if prev:
+        _unlink_review_staging_paths(prev)
+    with _staging_lock:
+        _session_review_staging_paths[sid] = list(paths)
+
+
+def clear_session_review_staging(session_id: str) -> None:
+    sid = str(session_id).strip()
+    if not sid:
+        return
+    with _staging_lock:
+        paths = _session_review_staging_paths.pop(sid, None)
+    if paths:
+        _unlink_review_staging_paths(paths)
+
+
+def get_session_review_staging_paths(session_id: str) -> List[str]:
+    sid = str(session_id).strip()
+    if not sid:
+        return []
+    with _staging_lock:
+        return list(_session_review_staging_paths.get(sid, []))
+
 
 def get_memory(session_id: Optional[str] = None) -> UnifiedMemory:
     """
@@ -165,6 +214,7 @@ def clear_session_memory(session_id: str) -> None:
     sid = str(session_id).strip()
     if not sid:
         return
+    clear_session_review_staging(sid)
     with _sessions_lock:
         mem = _sessions.pop(sid, None)
     if mem is not None:

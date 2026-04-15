@@ -16,18 +16,30 @@ from reviewagent.adapters.errors import enrich_agent_error
 from reviewagent.adapters.llm_factory import create_chat_model
 from reviewagent.config import Settings, get_settings
 from reviewagent.limits import enforce_file_size, enforce_text_utf8_bytes
-from reviewagent.memory import get_memory
+from reviewagent.memory import get_memory, get_session_review_staging_paths
 from reviewagent.observability.metrics import get_metrics
 from reviewagent.rag.store import retrieve_knowledge_context
 from reviewagent.pipeline.biz_context import BizContext
 from reviewagent.toolpacks.registry import default_registry
-from reviewagent.review_report import enrich_result_response_violation_types
+from reviewagent.review_report import enrich_result_response_violation_types, parse_review_json_from_llm_output
 from reviewagent.storage.review import ReviewStore
 
 logger = logging.getLogger(__name__)
 
 # Log prefix: grep "[review.core]" to trace one request through the core path
 _MC = "[review.core]"
+
+# One-shot JSON normalization when the main agent turn omits parseable verdict JSON.
+_VERDICT_REPAIR_SYSTEM = """你是内容审核流水线中的「输出规范化」步骤。
+你的唯一任务：阅读下面「助手输出」全文（可能含自然语言、工具结果摘录、或误印的 XML），产出**一条且仅一条**合法 JSON 对象。
+
+硬性要求：
+- 不要 Markdown 代码围栏；不要输出 ```；不要输出 <tool_call> 等伪工具标签；不要任何解释性前后缀。
+- 顶层字段必须包含：verdict、confidence、violations、summary。
+- verdict 只能是 PASS、WARN、BLOCK、UNKNOWN 之一；UNKNOWN 表示无法从给定材料做出可靠合规判断。
+- confidence 为 0 到 1 的数值；violations 为数组（无则 []）；summary 为简短中文说明。
+
+若上文明显在规划调用工具却未给出结论，请结合「用户请求节选」给出最合理的 UNKNOWN 或 WARN，并在 summary 中说明信息不足或需重试。"""
 
 def _payload_brief(content_type: str, content: str) -> str:
     if content_type in ("image", "video", "audio"):
@@ -47,18 +59,49 @@ def _attach_pipeline_review_domain(result: dict[str, Any]) -> None:
         result["pipeline_trace"] = pt
 
 
+async def _maybe_repair_verdict_json(llm: Any, final_text: str, user_input: str) -> str:
+    """If assistant content has no review-shaped JSON, ask base LLM once (no tools) to emit one."""
+    s = (final_text or "").strip()
+    if not s:
+        return final_text or ""
+    if parse_review_json_from_llm_output(final_text) is not None:
+        return final_text
+    try:
+        repair_messages = [
+            SystemMessage(content=_VERDICT_REPAIR_SYSTEM),
+            HumanMessage(
+                content="【用户请求节选】\n"
+                + ((user_input or "")[:4000] or "(无)")
+                + "\n\n【需规范为 JSON 的助手输出】\n"
+                + s[:14000]
+            ),
+        ]
+        ai = await llm.ainvoke(repair_messages)
+        if isinstance(ai, AIMessage):
+            candidate = (ai.content or "").strip()
+        else:
+            candidate = str(getattr(ai, "content", ai) or "").strip()
+        if not candidate:
+            return final_text
+        if parse_review_json_from_llm_output(candidate) is not None:
+            logger.info("%s verdict_repair ok (replaced non-JSON assistant output)", _MC)
+            return candidate
+        logger.info("%s verdict_repair skipped (repair output still not JSON)", _MC)
+        return final_text
+    except Exception as e:
+        logger.warning("%s verdict_repair failed: %s", _MC, e)
+        return final_text
+
+
 def _response_verdict_hint(response: Any) -> str:
     if response is None:
         return "?"
     s = str(response).strip()
     if not s:
         return "?"
-    try:
-        d = json.loads(s)
-        if isinstance(d, dict):
-            return str(d.get("verdict", "?"))
-    except json.JSONDecodeError:
-        pass
+    d = parse_review_json_from_llm_output(s)
+    if isinstance(d, dict):
+        return str(d.get("verdict", "?"))
     return "non_json"
 
 
@@ -166,6 +209,74 @@ class ReviewOrchestrator:
         self.tools = self._registry.resolve_tools(ctx)
         self.tool_map = {t.name: t for t in self.tools}
 
+    def _latest_staged_media_path_and_type(self) -> tuple[Optional[str], Optional[str]]:
+        from reviewagent.ingest import load_local_file_for_review
+
+        sid = (self._session_id or "").strip()
+        if not sid:
+            return None, None
+        for p in reversed(get_session_review_staging_paths(sid)):
+            pp = Path(p)
+            if not pp.is_file():
+                continue
+            ct, _ = load_local_file_for_review(pp)
+            if ct in ("video", "audio", "image"):
+                return str(pp), ct
+        return None, None
+
+    def has_staged_media_for_session_followup(self) -> bool:
+        mp, mt = self._latest_staged_media_path_and_type()
+        return bool(mp and mt)
+
+    def record_file_upload_turn_for_session(
+        self,
+        *,
+        orig_name: str,
+        content_type: str,
+        staging_path: str,
+        result: dict[str, Any],
+    ) -> None:
+        """Persist upload + outcome into short-term memory (early pipelines skip ``run()`` otherwise)."""
+        if not self._session_id or not str(self._session_id).strip():
+            return
+        for m in reversed(self.memory.short_term.get_messages()[-12:]):
+            if getattr(m, "type", "") == "human" and staging_path in str(
+                getattr(m, "content", "") or ""
+            ):
+                return
+        user_turn = (
+            f"[Uploaded file] original_name={orig_name} content_type={content_type} "
+            f"server_staging_path={staging_path}\n"
+            "For follow-up or re-analysis, use this exact path with video_detector, "
+            "audio_detector, or image_detector as appropriate."
+        )
+        resp = str(result.get("response") or "").strip()
+        if not resp:
+            err = result.get("error")
+            if err is not None:
+                resp = str(err)
+        if not resp:
+            resp = "(empty response)"
+        self.memory.short_term.add_user_message(user_turn)
+        self.memory.short_term.add_ai_message(resp[:80000])
+
+    async def review_session_text_followup_async(self, user_text: str) -> dict[str, Any]:
+        """Re-check the latest same-session staged media via the stable media pipeline."""
+        self._enforce_payload_raw("text", user_text)
+        media_path, media_ct = self._latest_staged_media_path_and_type()
+        if not media_path or not media_ct:
+            return await self.review_payload_async("text", user_text)
+
+        # Avoid agent tool-loop dead-ends for media re-check; reuse deterministic media pipeline.
+        out = await self.review_payload_async(media_ct, media_path)
+        pt = dict(out.get("pipeline_trace") or {})
+        pt["session_staged_followup"] = True
+        note = (user_text or "").strip()
+        if note:
+            pt["session_followup_note"] = note[:500]
+        out["pipeline_trace"] = pt
+        return out
+
     def _biz_context_system_suffix(self) -> str:
         b = self._biz_context
         if not any((b.biz_line, b.tenant_id, b.trust_tier, b.audience, b.policy_pack_id)):
@@ -222,6 +333,7 @@ class ReviewOrchestrator:
 }}
 ```
 每条 violations[].type 使用稳定英文 key（如 porn、illegal、spam）；**违规分类**由服务端根据 violations 自动汇总展示，无需单独输出字段。
+- **禁止**在最终对用户可见的回复中书写 `<tool_call>`、`</tool_call>`、`<arg_key>` 等伪工具 XML；真实工具调用由系统自动处理；你的最后一轮回复**必须**是一段可直接解析的 JSON 对象（可含简短中文自然语言前缀时仍须在同条消息内给出完整 JSON）。
 """
         multi = """
 ## 多轮对话
@@ -414,6 +526,58 @@ class ReviewOrchestrator:
             user_input,
             self._settings.limits.max_user_message_bytes,
             field="用户消息（含提示模板）",
+        )
+
+    def prior_substantive_user_text_for_text_recheck(self) -> Optional[str]:
+        """Prior user message to re-run as text review: skip upload stubs and short re-check phrases."""
+        from reviewagent.api.followup_text_heuristic import text_suggests_recheck_same_media
+
+        for m in reversed(self.memory.short_term.get_messages()):
+            if getattr(m, "type", "") != "human":
+                continue
+            c = str(getattr(m, "content", "") or "").strip()
+            if not c or c.startswith("[Uploaded file]"):
+                continue
+            if text_suggests_recheck_same_media(c):
+                continue
+            return c
+        return None
+
+    def no_staged_media_recheck_result(self, *, user_text: str) -> dict[str, Any]:
+        """Fast path when the user asks to re-check but there is no prior text or file to re-run."""
+        summary = (
+            "未找到上一轮可复检的内容：多轮「再检」需要会话里已有用户发送过的待审正文，"
+            "或先通过 /file 上传媒体。请先发送要审核的文字或使用 /file。"
+        )
+        payload = {
+            "verdict": "WARN",
+            "confidence": 1.0,
+            "violations": [
+                {
+                    "type": "no_recheck_target",
+                    "content": summary,
+                    "severity": "low",
+                    "position": "—",
+                }
+            ],
+            "summary": summary,
+        }
+        t0 = time.perf_counter()
+        rr = {
+            "success": True,
+            "response": json.dumps(payload, ensure_ascii=False),
+            "iterations": 0,
+            "duration_ms": round((time.perf_counter() - t0) * 1000.0, 2),
+            "pipeline_trace": {
+                "mode": "no_staged_recheck",
+                "continued_to_llm": False,
+            },
+        }
+        return self._finalize_early_pipeline_result(
+            rr,
+            content_type="text",
+            input_summary=user_text,
+            early_block_log_path="no_staged_recheck",
         )
 
     def _finalize_early_pipeline_result(
@@ -891,6 +1055,7 @@ class ReviewOrchestrator:
                 if not isinstance(ai_msg, AIMessage):
                     messages.append(ai_msg)
                     final_text = str(getattr(ai_msg, "content", ai_msg))
+                    final_text = await _maybe_repair_verdict_json(self.llm, final_text, user_input)
                     break
 
                 tool_calls = getattr(ai_msg, "tool_calls", None) or []
@@ -931,6 +1096,7 @@ class ReviewOrchestrator:
 
                 messages.append(ai_msg)
                 final_text = ai_msg.content or ""
+                final_text = await _maybe_repair_verdict_json(self.llm, final_text, user_input)
                 self.memory.short_term.add_user_message(user_input)
                 self.memory.short_term.add_ai_message(final_text)
                 break
@@ -944,6 +1110,9 @@ class ReviewOrchestrator:
                 if not final_text and messages:
                     final_text = str(getattr(messages[-1], "content", "") or "")
                 if not err:
+                    final_text = await _maybe_repair_verdict_json(
+                        self.llm, final_text or "", user_input
+                    )
                     self.memory.short_term.add_user_message(user_input)
                     self.memory.short_term.add_ai_message(
                         final_text or "（已达最大工具轮次，请用户简化请求或提高 max_iterations）"

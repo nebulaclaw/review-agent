@@ -29,6 +29,7 @@ def review_tui_bindings() -> list[Binding]:
         return [
             Binding("ctrl+c", "quit", "Quit", show=True),
             Binding("ctrl+l", "clear_screen", "Clear", show=True),
+            Binding("ctrl+s", "submit_review", "Send", show=True),
             Binding("f1", "show_help", "Help", show=True),
             Binding("f2", "copy_last_report", "Copy report", show=True),
             Binding("f3", "configure_model", "Model", show=True),
@@ -37,6 +38,7 @@ def review_tui_bindings() -> list[Binding]:
     return [
         Binding("ctrl+c", "quit", "退出", show=True),
         Binding("ctrl+l", "clear_screen", "清屏", show=True),
+        Binding("ctrl+s", "submit_review", "发送", show=True),
         Binding("f1", "show_help", "帮助", show=True),
         Binding("f2", "copy_last_report", "复制报告", show=True),
         Binding("f3", "configure_model", "模型", show=True),
@@ -51,21 +53,23 @@ _TUI_TEXT: dict[str, dict[str, str]] = {
             "内容审核 TUI（HTTP 客户端）\n\n"
             "需先启动 API: content-review server\n"
             "或: content-review tui --with-server\n\n"
-            "文本回车提交；F2 /copy 复制报告；F3 /config 模型；F4 /lang 界面语言。\n"
-            "/ 命令可补全（Tab）；/file ./a.png 上传。"
+            "待审文本：**Enter 发送**；**Shift+Enter 换行**（输入框聚焦时会尝试启用 Kitty 键盘增强；iTerm2 请开「Report keys using CSI u」）。**Ctrl+J** 也可换行；**Ctrl+S** 或「发送」同提交。\n"
+            "若按键异常：环境变量 REVIEW_TUI_DISABLE_KBD_ENHANCE=1 关闭增强。系统终端 Apple_Terminal 不启用增强。\n"
+            "/ 命令见侧栏；/file ./a.png 上传。"
         ),
-        "input_placeholder": "审核文本回车 · / 开头命令自动提示 · Tab/→ 接受灰色补全",
+        "input_placeholder": "Enter 发送 · Shift+Enter 换行 · Ctrl+J 换行 · Ctrl+S 提交 · / 命令",
         "send": "发送",
-        "status_ready": "就绪 · 输入 / 查看命令列表；灰色字为可补全后缀",
+        "status_ready": "就绪 · 输入 / 查看命令列表；状态行提示候选前缀",
         "status_api_down": "API 不可达: {base}",
-        "status_idle_cmds": "就绪 · 输入 / 查看命令；灰色为补全后缀，Tab 或 → 接受",
-        "status_enter_review": "Enter 发送文本审核 · / 使用命令（见侧栏）",
-        "status_slash_list": "/help /? /file /copy /toolpacks /model /config /lang /refresh /new — Tab 或 → 补全",
+        "status_idle_cmds": "就绪 · 输入 / 查看命令；状态行显示候选命令前缀",
+        "status_enter_review": "Enter 发送 · Shift+Enter 换行 · Ctrl+S 同提交 · / 命令见侧栏",
+        "status_slash_list": "/help /? /file /again /copy /toolpacks /model /config /lang /refresh /new",
         "status_no_cmd": "无匹配命令，输入 /help 查看说明",
-        "status_complete": "补全 → {m}（Tab / →）",
+        "status_complete": "匹配命令: {m}",
         "status_candidates": "候选: {heads}",
         "busy_review": "审核中…",
         "busy_upload": "上传审核中…",
+        "again_default_note": "请对会话中最近一次上传的同一媒体再审核一次。",
         "ready": "就绪",
         "cleared_msgs": "已清空消息区。",
         "cleared_local": "已清空本地消息区（服务端按请求无会话状态）。",
@@ -95,6 +99,7 @@ _TUI_TEXT: dict[str, dict[str, str]] = {
         "err_unknown": "未知错误",
         "clip_structured": "结构化结果（JSON）",
         "clip_raw": "模型原文",
+        "response_no_json_banner": "（未解析到裁决 JSON：可能为工具占位符或模型未收尾。以下为原文摘录。）",
         "batch_detail": "批量审核明细，共 {n} 项",
         "batch_from": "来源: {s}",
         # sidebar
@@ -118,8 +123,10 @@ _TUI_TEXT: dict[str, dict[str, str]] = {
         "sb_toolpacks_fail": "（未能拉取列表）",
         "sb_toolpacks_retry": "（连接恢复后点 /refresh）",
         "sb_cmds": "[ 命令 ]",
-        "sb_line_help": "/help   帮助（/ 后输入字母可补全，Tab）",
+        "sb_line_help": "/help   帮助（/ 后看状态行候选）",
+        "sb_line_submit": "Enter 发送 · Shift+Enter 换行 · Ctrl+J 换行 · Ctrl+S 提交",
         "sb_line_file": "/file <路径…>  多路径空格分隔，可加引号",
+        "sb_line_again": "/again [说明]  对已上传媒体再检（本会话须先 /file）",
         "sb_line_refresh": "/refresh  刷新侧栏",
         "sb_line_new": "/new    新会话（释放服务端记忆）",
         "sb_line_model": "/model   查看模型信息",
@@ -158,21 +165,23 @@ _TUI_TEXT: dict[str, dict[str, str]] = {
             "Content review TUI (HTTP client)\n\n"
             "Start the API: content-review server\n"
             "or: content-review tui --with-server\n\n"
-            "Enter to submit text; F2 / /copy for last report; F3 /config model; F4 /lang UI language.\n"
-            "/ commands tab-complete; /file ./a.png to upload."
+            "**Enter** sends; **Shift+Enter** newline (Kitty keyboard flags pushed while the input is focused; in iTerm2 enable \"Report keys using CSI u\"). **Ctrl+J** newline; **Ctrl+S** or **Send** also submits. F2 / /copy; F3 /config; F4 /lang.\n"
+            "If keys misbehave: set REVIEW_TUI_DISABLE_KBD_ENHANCE=1. Apple Terminal skips enhancement.\n"
+            "/ commands in sidebar; /file ./a.png to upload."
         ),
-        "input_placeholder": "Type text, Enter to review · / for commands · Tab/→ accept suggestion",
+        "input_placeholder": "Enter send · Shift+Enter newline · Ctrl+J newline · Ctrl+S submit · / commands",
         "send": "Send",
-        "status_ready": "Ready · type / for commands; gray text is completable",
+        "status_ready": "Ready · type / for commands; status line shows command prefixes",
         "status_api_down": "API unreachable: {base}",
-        "status_idle_cmds": "Ready · / for commands; Tab or → to accept completion",
-        "status_enter_review": "Enter to submit text · / for commands (see sidebar)",
-        "status_slash_list": "/help /? /file /copy /toolpacks /model /config /lang /refresh /new — Tab or →",
+        "status_idle_cmds": "Ready · / for commands; status line shows matching prefixes",
+        "status_enter_review": "Enter send · Shift+Enter newline · Ctrl+S submit · / commands (sidebar)",
+        "status_slash_list": "/help /? /file /again /copy /toolpacks /model /config /lang /refresh /new",
         "status_no_cmd": "No matching command; type /help",
-        "status_complete": "Complete → {m} (Tab / →)",
+        "status_complete": "Matching command: {m}",
         "status_candidates": "Choices: {heads}",
         "busy_review": "Reviewing…",
         "busy_upload": "Uploading & reviewing…",
+        "again_default_note": "Please re-review the same media last uploaded in this session.",
         "ready": "Ready",
         "cleared_msgs": "Message area cleared.",
         "cleared_local": "Local messages cleared (server is stateless per request).",
@@ -202,6 +211,7 @@ _TUI_TEXT: dict[str, dict[str, str]] = {
         "err_unknown": "Unknown error",
         "clip_structured": "Structured result (JSON)",
         "clip_raw": "Raw model output",
+        "response_no_json_banner": "(No verdict JSON parsed — possible tool stubs or incomplete model output. Raw excerpt below.)",
         "batch_detail": "Batch detail, {n} item(s)",
         "batch_from": "Source: {s}",
         "sb_header": "[ Review TUI ]",
@@ -224,8 +234,10 @@ _TUI_TEXT: dict[str, dict[str, str]] = {
         "sb_toolpacks_fail": "(could not load list)",
         "sb_toolpacks_retry": "(use /refresh after connection)",
         "sb_cmds": "[ Commands ]",
-        "sb_line_help": "/help   Help (Tab-complete after /)",
+        "sb_line_help": "/help   Help (see status line for prefixes after /)",
+        "sb_line_submit": "Enter send · Shift+Enter newline · Ctrl+J newline · Ctrl+S submit",
         "sb_line_file": "/file <paths…>  multiple paths, quoted OK",
+        "sb_line_again": "/again [note]  Re-check last uploaded media (need /file in this session)",
         "sb_line_refresh": "/refresh  Refresh sidebar",
         "sb_line_new": "/new    New session (clear server memory)",
         "sb_line_model": "/model   Show model info",
@@ -270,8 +282,9 @@ def build_help_message() -> str:
             "2) Env REVIEW_AGENT_API_BASE_URL can point to a remote API.\n\n"
             "This process keeps one X-Review-Session; follow-ups reuse context.\n"
             "/new starts a new session and clears server-side memory.\n\n"
-            "Plain text + Enter → POST /v1/review\n"
-            "/file paths… → POST /v1/review/file (multipart field files)\n\n"
+            "Plain text: Enter → send; Shift+Enter → newline (with CSI u / Kitty flags); Ctrl+S or Send also submits\n"
+            "/file paths… → POST /v1/review/file (multipart field files)\n"
+            "/again [optional note] → explicit media re-check; for plain-text sessions, very short lines like \"check again\" re-run the last substantive user message from history (or use /file for uploads).\n\n"
             "F2 or /copy: copy last report (plain text + parsed JSON).\n"
             "/toolpacks: refresh tool-pack list in sidebar.\n"
             "F3 or /config: edit LLM (PATCH server or local YAML).\n"
@@ -285,8 +298,9 @@ def build_help_message() -> str:
         "2) 环境变量 REVIEW_AGENT_API_BASE_URL 可指向远程服务。\n\n"
         "同一 TUI 进程固定 X-Review-Session，追问/异议会带上文。\n"
         "/new 可换会话并释放服务端记忆。\n\n"
-        "输入文本回车 → POST /v1/review\n"
-        "/file 路径… → POST /v1/review/file（多文件时 multipart 字段 files）\n\n"
+        "输入后 **Enter** 发送；**Shift+Enter** 换行（见欢迎语说明）；**Ctrl+S** 或「发送」也可提交 → POST /v1/review\n"
+        "/file 路径… → POST /v1/review/file（多文件时 multipart 字段 files）\n"
+        "/again [可选说明] → 显式复检媒体；纯文本多轮时「再检一次」等短句会按会话里上一轮正文自动重审（须先发过待审文字或 /file）。\n\n"
         "F2 或 /copy：复制最近一次审核报告到剪贴板（纯文本 + 解析出的 JSON）。\n"
         "/toolpacks：刷新侧栏工具包列表（LangChain 工具分组，非 Claude SKILL 类 Skills）。\n"
         "F3 或 /config：编辑 LLM（API 可用时 PATCH 服务端并热加载；否则写本机 YAML）。\n"

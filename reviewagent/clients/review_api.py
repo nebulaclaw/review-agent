@@ -59,11 +59,23 @@ class ReviewAPIClient:
         except httpx.HTTPError:
             return False
 
-    async def moderate(self, content: str, content_type: str = "auto") -> Dict[str, Any]:
+    async def moderate(
+        self,
+        content: str,
+        content_type: str = "auto",
+        *,
+        continue_last_upload: bool = False,
+    ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "content": content,
+            "content_type": content_type,
+        }
+        if continue_last_upload:
+            payload["continue_last_upload"] = True
         async with httpx.AsyncClient(timeout=600.0) as client:
             r = await client.post(
                 f"{self.base_url}/v1/review",
-                json={"content": content, "content_type": content_type},
+                json=payload,
                 headers=self._session_headers,
             )
             self._raise_for_status(r)

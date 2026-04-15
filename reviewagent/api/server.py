@@ -22,6 +22,7 @@ from reviewagent.config import (
 )
 from reviewagent.pipeline.biz_context import biz_context_from_payload
 from reviewagent.limits import LimitsExceededError, enforce_file_size, enforce_text_utf8_bytes
+from reviewagent.memory import register_session_review_staging_paths
 from reviewagent.observability.metrics import get_metrics
 from reviewagent.storage.review import ReviewStore
 
@@ -45,6 +46,10 @@ def _public_batch_item(item: Dict[str, Any]) -> Dict[str, Any]:
 class ModerateBody(BaseModel):
     content: str = Field(..., description="Content to review or media path description")
     content_type: str = Field(default="auto", description="auto | text | image | video | audio")
+    continue_last_upload: bool = Field(
+        default=False,
+        description="If true, re-run media tools on the session's staged file(s) from POST /v1/review/file (requires X-Review-Session); content is the user's note or empty for a default prompt",
+    )
     session_id: Optional[str] = Field(
         default=None,
         description="Multi-turn session id; alternatively use X-Review-Session header; same id shares short-term memory",
@@ -274,18 +279,50 @@ def create_app() -> FastAPI:
         from reviewagent.agent import create_review_orchestrator
 
         s = get_settings()
+        sid = (x_review_session or body.session_id or "").strip() or None
+        biz = biz_context_from_payload(body.biz_context)
+        orchestrator = create_review_orchestrator(session_id=sid, biz_context=biz)
+
+        if body.continue_last_upload:
+            if not sid:
+                raise HTTPException(
+                    status_code=400,
+                    detail="continue_last_upload requires X-Review-Session or session_id in body",
+                )
+            if not orchestrator.has_staged_media_for_session_followup():
+                raise HTTPException(
+                    status_code=400,
+                    detail="no staged upload in this session; use POST /v1/review/file first",
+                )
+            note = (body.content or "").strip() or (
+                "请对会话中最近一次上传的同一媒体再审核一次。"
+            )
+            try:
+                enforce_text_utf8_bytes(note, s.limits.max_text_bytes, field="content to review")
+            except LimitsExceededError as e:
+                raise HTTPException(status_code=413, detail=str(e)) from e
+            return await orchestrator.review_session_text_followup_async(note)
+
         try:
             enforce_text_utf8_bytes(body.content, s.limits.max_text_bytes, field="content to review")
         except LimitsExceededError as e:
             raise HTTPException(status_code=413, detail=str(e)) from e
 
-        sid = (x_review_session or body.session_id or "").strip() or None
-        biz = biz_context_from_payload(body.biz_context)
-        orchestrator = create_review_orchestrator(session_id=sid, biz_context=biz)
         ct = body.content_type.strip().lower() if isinstance(body.content_type, str) else "auto"
         if ct not in ("auto", "text", "image", "video", "audio"):
             ct = "auto"
         resolved_ct = _infer_content_type_from_input(body.content) if ct == "auto" else ct
+        if sid and ct == "auto" and resolved_ct == "text":
+            from reviewagent.api.followup_text_heuristic import text_suggests_recheck_same_media
+
+            if text_suggests_recheck_same_media(body.content):
+                if orchestrator.has_staged_media_for_session_followup():
+                    return await orchestrator.review_session_text_followup_async(body.content)
+                prior_text = orchestrator.prior_substantive_user_text_for_text_recheck()
+                if prior_text:
+                    return await orchestrator.review_payload_async("text", prior_text)
+                return orchestrator.no_staged_media_recheck_result(user_text=body.content)
+
         return await orchestrator.review_payload_async(resolved_ct, body.content)
 
     @app.post("/v1/review/file")
@@ -320,6 +357,7 @@ def create_app() -> FastAPI:
         tmp_paths: list[str] = []
         meta: list[str] = []
         s = get_settings()
+        staged_for_session = False
         try:
             for up in uploads:
                 data = await up.read()
@@ -342,12 +380,18 @@ def create_app() -> FastAPI:
                 Path(tmp_path).write_bytes(data)
                 tmp_paths.append(tmp_path)
 
+            if sid:
+                register_session_review_staging_paths(sid, list(tmp_paths))
+                staged_for_session = True
+
             orchestrator = create_review_orchestrator(session_id=sid)
             results: List[Dict[str, Any]] = []
             for orig_name, tmp_path in zip(meta, tmp_paths):
                 item: Dict[str, Any] = {"index": len(results), "filename": orig_name}
+                ct_guess = "?"
                 try:
                     ct, payload = load_local_file_for_review(Path(tmp_path))
+                    ct_guess = ct
                     item["inferred_content_type"] = ct
                     r = await orchestrator.review_payload_async(ct, payload)
                     item.update(r)
@@ -356,6 +400,13 @@ def create_app() -> FastAPI:
                     item["error"] = str(e)
                     item.setdefault("response", "")
                 results.append(item)
+                if sid:
+                    orchestrator.record_file_upload_turn_for_session(
+                        orig_name=orig_name,
+                        content_type=str(item.get("inferred_content_type") or ct_guess),
+                        staging_path=tmp_path,
+                        result=item,
+                    )
 
             if len(results) == 1:
                 return _public_single_result(results[0])
@@ -365,17 +416,17 @@ def create_app() -> FastAPI:
                 "results": [_public_batch_item(x) for x in results],
             }
         finally:
-            for tmp_path in tmp_paths:
-                try:
-                    p = Path(tmp_path)
-                    if p.exists():
-                        p.unlink()
-                    # Remove our temp dir if empty
-                    parent = p.parent
-                    if parent.name.startswith("review_upload_"):
-                        parent.rmdir()
-                except OSError:
-                    pass
+            if not staged_for_session:
+                for tmp_path in tmp_paths:
+                    try:
+                        p = Path(tmp_path)
+                        if p.exists():
+                            p.unlink()
+                        parent = p.parent
+                        if parent.name.startswith("review_upload_"):
+                            parent.rmdir()
+                    except OSError:
+                        pass
 
     @app.post("/v1/tasks", status_code=202)
     async def enqueue_task(body: TaskCreateBody) -> dict[str, str]:

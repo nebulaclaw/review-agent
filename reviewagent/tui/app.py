@@ -15,13 +15,11 @@ import subprocess
 from pathlib import Path
 from typing import Any, Optional, Tuple
 
-from textual import on, work
+from textual import events, on, work
 from textual.app import App, ComposeResult
-from textual.binding import Binding
 from textual.css.query import NoMatches
 from textual.containers import Horizontal, Vertical, ScrollableContainer
-from textual.suggester import Suggester
-from textual.widgets import Button, Footer, Header, Input, Static
+from textual.widgets import Button, Footer, Header, Static, TextArea
 from rich.text import Text
 
 from reviewagent.clients.review_api import ReviewAPIClient, default_api_base
@@ -33,9 +31,16 @@ from reviewagent.review_report import (
     batch_item_source_label,
     compute_violation_type_labels,
     format_batch_summary,
+    parse_review_json_from_llm_output,
     violations_for_report_display,
 )
 from reviewagent.tui.i18n import build_help_message, review_tui_bindings, tt, tui_ui_locale
+from reviewagent.tui.kitty_keyboard import (
+    KITTY_KBD_POP,
+    KITTY_KBD_PUSH,
+    driver_write_raw,
+    kitty_kbd_enhance_enabled,
+)
 from reviewagent.limits import LimitsExceededError, enforce_file_size, enforce_text_utf8_bytes
 
 # Match _dispatch_slash: keep space after /file for typing paths
@@ -43,6 +48,7 @@ SLASH_COMMAND_COMPLETIONS: tuple[str, ...] = (
     "/help",
     "/?",
     "/file ",
+    "/again ",
     "/copy",
     "/toolpacks",
     "/model",
@@ -53,49 +59,42 @@ SLASH_COMMAND_COMPLETIONS: tuple[str, ...] = (
 )
 
 
-class SlashCommandSuggester(Suggester):
-    """Prefix-complete only when input starts with `/` and has length ≥ 2 (bare `/` has no default)."""
+class ReviewSubmitTextArea(TextArea):
+    """Enter submits; Shift+Enter newline when the terminal reports it (Kitty CSI u, see kitty_keyboard)."""
 
-    def __init__(self) -> None:
-        super().__init__(case_sensitive=False, use_cache=True)
-        self._canonical = SLASH_COMMAND_COMPLETIONS
-        self._folded = tuple(s.casefold() for s in self._canonical)
+    def on_focus(self) -> None:
+        app = self.app
+        if isinstance(app, ReviewTUI):
+            app._kbd_enhance_on_input_focus()
 
-    async def get_suggestion(self, value: str) -> str | None:
-        if len(value) < 2 or not value.startswith("/"):
-            return None
-        if value == "/":
-            return None
-        for canon, folded in zip(self._canonical, self._folded):
-            if folded.startswith(value):
-                return canon
-        return None
+    def on_blur(self) -> None:
+        app = self.app
+        if isinstance(app, ReviewTUI):
+            app._kbd_enhance_on_input_blur()
 
-
-class CommandInput(Input):
-    """Tab accepts the gray suggestion (same as moving cursor to EOL); otherwise Tab moves focus."""
-
-    BINDINGS = [
-        Binding("tab", "accept_suggestion_or_focus_next", "", show=False),
-    ]
-
-    def action_accept_suggestion_or_focus_next(self) -> None:
-        if self.cursor_at_end and self._suggestion:
-            self.action_cursor_right()
-        else:
-            self.app.action_focus_next()
+    async def _on_key(self, event: events.Key) -> None:
+        k = event.key
+        if k in ("shift+enter", "shift+return"):
+            event.stop()
+            event.prevent_default()
+            await super()._on_key(events.Key("enter", "\n"))
+            return
+        if k == "ctrl+j":
+            event.stop()
+            event.prevent_default()
+            await super()._on_key(events.Key("enter", "\n"))
+            return
+        if k in ("enter", "return"):
+            event.stop()
+            event.prevent_default()
+            self.app.action_submit_review()
+            return
+        await super()._on_key(event)
 
 
 def _extract_json_object(text: str) -> Optional[dict[str, Any]]:
-    if not text:
-        return None
-    try:
-        match = re.search(r"\{[\s\S]*\}", text)
-        if not match:
-            return None
-        return json.loads(match.group())
-    except json.JSONDecodeError:
-        return None
+    """Prefer the last review-shaped JSON object (same rules as API enrichment)."""
+    return parse_review_json_from_llm_output(text or "")
 
 
 _VERDICT_LINE_PREFIXES: tuple[str, ...] = ("审核结果:", "Review result:")
@@ -118,6 +117,8 @@ def verdict_style_from_response(response: str) -> str:
         return "verdict-warn"
     if v == "BLOCK":
         return "verdict-block"
+    if v == "UNKNOWN":
+        return "verdict-warn"
     return "ai-plain"
 
 
@@ -128,6 +129,8 @@ def _verdict_label_style(verdict: str) -> str:
         return "bold #f1c40f"
     if verdict == "BLOCK":
         return "bold #e74c3c"
+    if verdict == "UNKNOWN":
+        return "bold #f39c12"
     return "bold #95a5a6"
 
 
@@ -196,7 +199,12 @@ def _report_chrome(locale: str) -> dict[str, str]:
 def format_review_body(response: str) -> str:
     data = _extract_json_object(response)
     if not data:
-        return response[:4000] + ("…" if len(response) > 4000 else "")
+        banner = tt("response_no_json_banner")
+        raw = (response or "").strip()
+        if not raw:
+            return banner
+        clipped = raw[:4000] + ("…" if len(raw) > 4000 else "")
+        return f"{banner}\n\n{clipped}"
 
     rloc = get_settings().pipeline.image_dual_check.report_locale
     loc = rloc if rloc in ("zh", "en") else "zh"
@@ -425,7 +433,9 @@ def build_sidebar_text(
             "",
             tt("sb_cmds"),
             tt("sb_line_help"),
+            tt("sb_line_submit"),
             tt("sb_line_file"),
+            tt("sb_line_again"),
             tt("sb_line_refresh"),
             tt("sb_line_new"),
             tt("sb_line_model"),
@@ -513,17 +523,21 @@ class ReviewTUI(App):
     }
     #input-bar {
         dock: bottom;
-        height: 9;
+        /* Fixed height: docked + height:auto collapses the bar in Textual (status invisible). */
+        height: 7;
         background: #1a1d28;
         border-top: solid #2d3348;
         padding: 0 1;
     }
     #input-box {
         height: 4;
-        margin-top: 1;
+        margin-top: 0;
     }
     #input-field {
         width: 1fr;
+        height: 3;
+        min-height: 3;
+        max-height: 4;
         background: #12141c;
     }
     #send-btn {
@@ -532,7 +546,7 @@ class ReviewTUI(App):
     }
     #status {
         height: 3;
-        margin-top: 1;
+        margin-top: 0;
         background: #12141c;
         color: #8b93a8;
         padding: 0 1;
@@ -550,6 +564,7 @@ class ReviewTUI(App):
         self.is_busy = False
         self._last_report_copy: str = ""
         self._server_llm: Optional[dict[str, Any]] = None
+        self._kbd_enhance_active = False
         self.BINDINGS = review_tui_bindings()
 
     def compose(self) -> ComposeResult:
@@ -566,10 +581,12 @@ class ReviewTUI(App):
                 yield Static("", id="sidebar-body", markup=False)
         with Vertical(id="input-bar"):
             with Horizontal(id="input-box"):
-                yield CommandInput(
+                yield ReviewSubmitTextArea(
                     placeholder=tt("input_placeholder"),
                     id="input-field",
-                    suggester=SlashCommandSuggester(),
+                    compact=True,
+                    soft_wrap=True,
+                    tab_behavior="focus",
                 )
                 yield Button(tt("send"), id="send-btn", variant="primary")
             yield Static(
@@ -585,7 +602,29 @@ class ReviewTUI(App):
         self._refresh_server_llm_snapshot()
         self._update_subtitle()
         self._apply_ui_language()
-        self.query_one("#input-field", Input).focus()
+        self.query_one("#input-field", ReviewSubmitTextArea).focus()
+
+    def on_unmount(self) -> None:
+        self._kbd_enhance_pop()
+
+    def _kbd_enhance_pop(self) -> None:
+        if not self._kbd_enhance_active:
+            return
+        driver_write_raw(self, KITTY_KBD_POP)
+        self._kbd_enhance_active = False
+
+    def _kbd_enhance_on_input_focus(self) -> None:
+        """Called from ReviewSubmitTextArea.on_focus."""
+        if self.is_busy or not kitty_kbd_enhance_enabled():
+            return
+        if self._kbd_enhance_active:
+            return
+        driver_write_raw(self, KITTY_KBD_PUSH)
+        self._kbd_enhance_active = True
+
+    def _kbd_enhance_on_input_blur(self) -> None:
+        """Called from ReviewSubmitTextArea.on_blur."""
+        self._kbd_enhance_pop()
 
     def _apply_ui_language(self) -> None:
         """Refresh copy, shortcut hints, and sidebar when display locale changes in config."""
@@ -596,7 +635,7 @@ class ReviewTUI(App):
             self.query_one("#welcome-text", Static).update(tt("welcome"))
         except NoMatches:
             pass
-        inp = self.query_one("#input-field", Input)
+        inp = self.query_one("#input-field", ReviewSubmitTextArea)
         inp.placeholder = tt("input_placeholder")
         self.query_one("#send-btn", Button).label = tt("send")
         if self.client:
@@ -608,15 +647,15 @@ class ReviewTUI(App):
             if not self._api_ok and self.client:
                 st.update(tt("status_api_down").format(base=self.client.base_url))
             elif self._api_ok:
-                self._update_input_status_line(inp.value)
+                self._update_input_status_line(inp.text)
             else:
                 st.update(tt("status_ready"))
 
-    @on(Input.Changed, "#input-field")
-    def on_input_changed(self, event: Input.Changed) -> None:
+    @on(TextArea.Changed, "#input-field")
+    def on_text_area_changed(self, event: TextArea.Changed) -> None:
         if self.is_busy:
             return
-        self._update_input_status_line(event.value)
+        self._update_input_status_line(event.text_area.text)
 
     def _update_input_status_line(self, v: str) -> None:
         st = self.query_one("#status", Static)
@@ -666,7 +705,7 @@ class ReviewTUI(App):
         n = len(self._last_report_copy)
         self._add_system(tt("copy_done").format(n=n))
         if self._api_ok:
-            self._update_input_status_line(self.query_one("#input-field", Input).value)
+            self._update_input_status_line(self.query_one("#input-field", ReviewSubmitTextArea).text)
 
     def _refresh_server_llm_snapshot(self) -> None:
         self._server_llm = None
@@ -721,7 +760,7 @@ class ReviewTUI(App):
         self._add_system(tt("model_saved"))
         self._apply_ui_language()
         if self._api_ok:
-            self._update_input_status_line(self.query_one("#input-field", Input).value)
+            self._update_input_status_line(self.query_one("#input-field", ReviewSubmitTextArea).text)
 
     def _on_display_config_closed(self, saved: Optional[bool]) -> None:
         if not saved:
@@ -729,7 +768,7 @@ class ReviewTUI(App):
         self._add_system(tt("display_saved"))
         self._apply_ui_language()
         if self._api_ok:
-            self._update_input_status_line(self.query_one("#input-field", Input).value)
+            self._update_input_status_line(self.query_one("#input-field", ReviewSubmitTextArea).text)
 
     def action_configure_model(self) -> None:
         if self.is_busy:
@@ -755,20 +794,20 @@ class ReviewTUI(App):
     def on_send(self) -> None:
         self._handle_submit()
 
-    @on(Input.Submitted, "#input-field")
-    def on_submitted(self) -> None:
+    def action_submit_review(self) -> None:
+        """Submit current input (Enter in input, or Ctrl+S)."""
         self._handle_submit()
 
     def _handle_submit(self) -> None:
         if self.is_busy:
             return
 
-        input_field = self.query_one("#input-field", Input)
-        text = input_field.value.strip()
+        input_field = self.query_one("#input-field", ReviewSubmitTextArea)
+        text = input_field.text.strip()
         if not text:
             return
 
-        low = text.lower()
+        low = text.strip().lower()
         if low in ("quit", "exit", "q"):
             self.exit()
             return
@@ -777,13 +816,13 @@ class ReviewTUI(App):
             self.query_one("#messages", ScrollableContainer).remove_children()
             self._add_system(tt("cleared_local"))
             self.query_one("Static#status", Static).update(tt("ready"))
-            input_field.value = ""
+            input_field.text = ""
             input_field.focus()
             return
 
         if text.startswith("/"):
             self._dispatch_slash(text)
-            input_field.value = ""
+            input_field.text = ""
             input_field.focus()
             return
 
@@ -791,7 +830,7 @@ class ReviewTUI(App):
             self._add_system(tt("api_unavailable"))
             return
 
-        input_field.value = ""
+        input_field.text = ""
         self._add_message("user", text)
         self._set_busy(True, tt("busy_review"))
         self._run_moderate_text(text)
@@ -863,6 +902,15 @@ class ReviewTUI(App):
             )
         elif cmd == "/copy":
             self.action_copy_last_report()
+        elif cmd == "/again":
+            rest = parts[1].strip() if len(parts) > 1 else ""
+            if not self._api_ok:
+                self._add_system(tt("file_api_down"))
+                return
+            label = f"/again {rest}".strip() if rest else "/again"
+            self._add_message("user", label)
+            self._set_busy(True, tt("busy_review"))
+            self._run_moderate_again(rest)
         elif cmd == "/file":
             import shlex
 
@@ -886,6 +934,32 @@ class ReviewTUI(App):
             self._run_moderate_paths(paths)
         else:
             self._add_system(tt("unknown_cmd").format(cmd=cmd))
+
+    @work(exclusive=True)
+    async def _run_moderate_again(self, text: str) -> None:
+        """POST /v1/review with continue_last_upload (same session staged file)."""
+        assert self.client is not None
+        try:
+            try:
+                lim = get_settings().limits
+                note = text.strip() or tt("again_default_note")
+                enforce_text_utf8_bytes(note, lim.max_text_bytes, field=tt("field_pending_text"))
+            except LimitsExceededError as e:
+                self._add_message("error", str(e))
+                return
+            result = await self.client.moderate(
+                note, "auto", continue_last_upload=True
+            )
+            self._last_report_copy = build_report_clipboard_text(result)
+            msgs = self.query_one("#messages", ScrollableContainer)
+            mount_review_api_result(msgs, result)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            self._last_report_copy = f"{tt('clipboard_fail_title')}\n{str(e)}"
+            self._add_message("error", str(e))
+        finally:
+            self._set_busy(False, tt("ready"))
 
     @work(exclusive=True)
     async def _run_moderate_text(self, text: str) -> None:
@@ -941,14 +1015,14 @@ class ReviewTUI(App):
 
     def _set_busy(self, busy: bool, status: str) -> None:
         self.is_busy = busy
-        inp = self.query_one("#input-field", Input)
+        inp = self.query_one("#input-field", ReviewSubmitTextArea)
         inp.disabled = busy
         self.query_one("#send-btn", Button).disabled = busy
         self.query_one("Static#status", Static).update(status)
         if not busy:
             inp.focus()
             if self._api_ok:
-                self._update_input_status_line(inp.value)
+                self._update_input_status_line(inp.text)
 
     def _add_message(self, msg_type: str, content: str) -> None:
         msgs = self.query_one("#messages", ScrollableContainer)
