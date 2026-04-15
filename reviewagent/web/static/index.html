@@ -1,0 +1,1915 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>内容审核</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #0f1114;
+      --surface: #181c22;
+      --border: #2a313c;
+      --text: #e8eaed;
+      --muted: #8b949e;
+      --accent: #3d9a88;
+      --warn: #c9a227;
+      --err: #c45c5c;
+      --radius: 10px;
+      --font: "DM Sans", system-ui, sans-serif;
+      --mono: "JetBrains Mono", ui-monospace, monospace;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      background-image:
+        radial-gradient(ellipse 120% 80% at 100% -20%, rgba(61, 154, 136, 0.12), transparent),
+        radial-gradient(ellipse 80% 50% at -10% 100%, rgba(42, 49, 60, 0.5), transparent);
+    }
+    .wrap { max-width: 1100px; margin: 0 auto; padding: 1.5rem 1.25rem 3rem; }
+    header {
+      display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+      gap: 0.75rem; margin-bottom: 1.75rem; padding-bottom: 1rem; border-bottom: 1px solid var(--border);
+    }
+    h1 { font-size: 1.35rem; font-weight: 700; margin: 0; letter-spacing: -0.02em; }
+    .sub { color: var(--muted); font-size: 0.9rem; margin: 0.35rem 0 0; max-width: 36rem; }
+    .pill {
+      display: inline-flex; align-items: center; gap: 0.4rem;
+      font-size: 0.75rem; padding: 0.25rem 0.6rem; border-radius: 999px;
+      background: var(--surface); border: 1px solid var(--border);
+    }
+    .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); }
+    .dot.ok { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+    .dot.bad { background: var(--err); }
+    .header-actions {
+      display: flex; align-items: center; gap: 0.65rem; flex-shrink: 0;
+    }
+    .icon-btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 2.35rem; height: 2.35rem; padding: 0; border-radius: 8px;
+      background: var(--surface); border: 1px solid var(--border);
+      color: var(--muted); cursor: pointer;
+    }
+    .icon-btn:hover { color: var(--text); border-color: var(--accent); }
+    .icon-btn svg { width: 1.15rem; height: 1.15rem; display: block; }
+    #llm-settings-modal,
+    #display-settings-modal {
+      display: none; position: fixed; inset: 0; z-index: 1000;
+      align-items: center; justify-content: center; padding: 1rem;
+    }
+    #llm-settings-modal.is-visible,
+    #display-settings-modal.is-visible { display: flex; }
+    .modal-backdrop {
+      position: absolute; inset: 0; background: rgba(0, 0, 0, 0.55); cursor: pointer;
+    }
+    .modal-panel {
+      position: relative; z-index: 1; width: 100%; max-width: 28rem; max-height: 88vh;
+      overflow: auto; background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 1.2rem 1.25rem;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+    }
+    .modal-head {
+      display: flex; align-items: flex-start; justify-content: space-between;
+      gap: 0.75rem; margin-bottom: 0.65rem;
+    }
+    .modal-head h2 {
+      margin: 0; font-size: 1.05rem; font-weight: 600; color: var(--text);
+      letter-spacing: 0; text-transform: none;
+    }
+    .modal-close {
+      flex-shrink: 0; font-size: 1.35rem; line-height: 1; width: 2rem; height: 2rem;
+      padding: 0; border: none; background: transparent; color: var(--muted);
+      cursor: pointer; border-radius: 6px;
+    }
+    .modal-close:hover { color: var(--text); background: var(--bg); }
+    .form-row { margin-bottom: 0.8rem; }
+    .modal-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1rem; }
+    .grid { display: grid; gap: 1.25rem; }
+    @media (min-width: 880px) {
+      .grid-2 { grid-template-columns: 1fr 1fr; }
+    }
+    .card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 1.1rem 1.2rem;
+    }
+    .card h2 { margin: 0 0 0.85rem; font-size: 0.95rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+    label { display: block; font-size: 0.8rem; color: var(--muted); margin-bottom: 0.35rem; }
+    input[type="text"],
+    input[type="password"],
+    input[type="number"],
+    textarea,
+    select {
+      width: 100%; font-family: var(--font); font-size: 0.95rem;
+      padding: 0.55rem 0.65rem; border-radius: 8px;
+      border: 1px solid var(--border); background: var(--bg); color: var(--text);
+    }
+    input[type="password"]::-webkit-credentials-auto-fill-button {
+      filter: invert(0.85);
+    }
+    input:-webkit-autofill,
+    input:-webkit-autofill:focus,
+    input:-webkit-autofill:hover {
+      -webkit-box-shadow: 0 0 0 1000px var(--bg) inset;
+      box-shadow: 0 0 0 1000px var(--bg) inset;
+      -webkit-text-fill-color: var(--text);
+      caret-color: var(--text);
+      border: 1px solid var(--border);
+    }
+    textarea { min-height: 140px; resize: vertical; font-family: var(--mono); font-size: 0.85rem; }
+    .row { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: flex-end; margin-bottom: 0.75rem; }
+    .row > * { flex: 1; min-width: 140px; }
+    .actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.85rem; }
+    button {
+      font-family: var(--font); font-size: 0.88rem; font-weight: 600;
+      padding: 0.5rem 1rem; border-radius: 8px; border: none; cursor: pointer;
+      background: var(--accent); color: #0a0c0e;
+    }
+    button:hover { filter: brightness(1.08); }
+    button:disabled { opacity: 0.45; cursor: not-allowed; filter: none; }
+    button.secondary { background: transparent; color: var(--text); border: 1px solid var(--border); }
+    button.secondary:hover { border-color: var(--muted); }
+    .file-zone {
+      border: 1px dashed var(--border); border-radius: 8px; padding: 1rem;
+      text-align: center; color: var(--muted); font-size: 0.88rem;
+    }
+    .file-zone-pick {
+      position: relative;
+      margin-top: 0.75rem;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: center;
+      gap: 0.65rem;
+    }
+    .file-input-hidden {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+    #file-selected-names {
+      flex: 1 1 10rem;
+      min-width: 0;
+      font-size: 0.82rem;
+      color: var(--muted);
+      text-align: left;
+      line-height: 1.4;
+      word-break: break-all;
+    }
+    .result {
+      margin-top: 1rem; padding: 1rem; border-radius: 8px;
+      background: var(--bg); border: 1px solid var(--border);
+      font-size: 0.95rem; white-space: pre-wrap; word-break: break-word;
+      max-height: 420px; overflow: auto;
+    }
+    .result-prose {
+      font-family: var(--font); white-space: pre-wrap;
+      margin: 0; color: var(--text);
+    }
+    .result-prose.err { color: var(--err); }
+    .meta { font-size: 0.8rem; color: var(--muted); margin-bottom: 0.5rem; }
+    .batch-summary {
+      font-weight: 600; margin-bottom: 0.75rem; padding-bottom: 0.5rem;
+      border-bottom: 1px solid var(--border); color: var(--text);
+    }
+    .batch-item { padding: 0.75rem 0; border-bottom: 1px solid var(--border); }
+    .batch-item:last-child { border-bottom: none; }
+    .batch-name { font-weight: 600; margin-bottom: 0.35rem; word-break: break-all; }
+    .batch-name .batch-src-key { color: var(--muted); font-weight: 600; margin-right: 0.35rem; }
+    .session-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; margin-top: 0.5rem; }
+    .review-summary { margin: 0 0 0.75rem; padding: 0; list-style: none; }
+    .review-summary li { margin: 0.25rem 0; }
+    .review-summary strong { color: var(--muted); font-weight: 600; margin-right: 0.35rem; }
+    .report-head {
+      display: flex; align-items: center; justify-content: space-between;
+      flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.75rem;
+    }
+    .verdict {
+      font-weight: 700; padding: 0.35rem 0.65rem; border-radius: 6px;
+      font-size: 0.95rem; letter-spacing: 0.02em;
+    }
+    .verdict-pass { background: rgba(61, 154, 136, 0.22); color: #8fd9c8; border: 1px solid var(--accent); }
+    .verdict-warn { background: rgba(201, 162, 39, 0.18); color: #e8c84a; border: 1px solid var(--warn); }
+    .verdict-block { background: rgba(196, 92, 92, 0.22); color: #e8a0a0; border: 1px solid var(--err); }
+    .verdict-unknown { background: var(--surface); color: var(--muted); border: 1px solid var(--border); }
+    .report-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+    button.sm {
+      font-size: 0.78rem; padding: 0.35rem 0.75rem; font-weight: 600;
+    }
+    .report-meta { font-size: 0.8rem; color: var(--muted); margin: 0 0 0.85rem; line-height: 1.45; }
+    .report-block h3 {
+      font-size: 0.72rem; font-weight: 600; color: var(--muted); margin: 1rem 0 0.45rem;
+      text-transform: uppercase; letter-spacing: 0.06em;
+    }
+    .report-block h3:first-child { margin-top: 0; }
+    .violation-list { margin: 0; padding-left: 1.15rem; color: var(--text); font-size: 0.9rem; line-height: 1.5; }
+    .violation-list li { margin: 0.4rem 0; }
+    .summary-text {
+      margin: 0; white-space: pre-wrap; font-size: 0.9rem; line-height: 1.55; color: var(--text);
+    }
+    .batch-report-card {
+      background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+      padding: 0.85rem 1rem; margin-top: 0.65rem;
+    }
+    .batch-toolbar { margin: 0.5rem 0 0.75rem; }
+    .obs-body { font-size: 0.85rem; margin-top: 0.65rem; max-height: 340px; overflow: auto; }
+    .hist-sub { font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin: 0.85rem 0 0.35rem; }
+    .runs-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+    .runs-table th, .runs-table td { text-align: left; padding: 0.45rem 0.4rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+    .runs-table th { color: var(--muted); font-weight: 600; position: sticky; top: 0; background: var(--surface); z-index: 1; }
+    .run-row { cursor: pointer; }
+    .run-row:hover { background: rgba(255, 255, 255, 0.04); }
+    .run-row.active { background: rgba(61, 154, 136, 0.12); }
+    .mono-cell { font-family: var(--mono); font-size: 0.76rem; }
+    #run-detail-panel {
+      margin-top: 0.75rem; padding: 0.85rem; border-radius: 8px; border: 1px solid var(--border);
+      background: var(--bg); font-size: 0.82rem; display: none;
+    }
+    #run-detail-panel.visible { display: block; }
+    .detail-kv { margin: 0.35rem 0; }
+    .detail-kv strong { color: var(--muted); font-weight: 600; margin-right: 0.35rem; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div>
+        <h1 id="i18n-page-title">内容审核</h1>
+        <p class="sub" id="i18n-page-sub">提交文字或文件，获取审核结论。请确保内容合法合规，并遵守所在平台与管理要求。</p>
+      </div>
+      <div class="header-actions">
+        <span class="pill" id="health-pill"><span class="dot" id="health-dot"></span><span id="health-text">检查中…</span></span>
+        <button type="button" class="icon-btn" id="btn-display-settings" title="报告与展示（语言等）" aria-label="打开报告与展示设置">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="10" />
+            <path d="M2 12h20M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z" />
+          </svg>
+        </button>
+        <button type="button" class="icon-btn" id="btn-llm-settings" title="模型设置（LLM）" aria-label="打开模型设置">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 15.5a3.5 3.5 0 100-7 3.5 3.5 0 000 7z" />
+            <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z" />
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <input type="hidden" id="session-id" value="" />
+
+    <div class="grid grid-2">
+      <div class="card">
+        <h2 id="i18n-card-text-title">输入内容</h2>
+        <p class="meta" id="i18n-card-text-meta">支持文本、图片路径或视频路径，系统会自动识别内容类型。</p>
+        <label for="text-body" id="i18n-label-text-body">待审核内容</label>
+        <textarea id="text-body" placeholder="请粘贴需要审核的文字…"></textarea>
+        <div class="actions">
+          <button type="button" id="btn-text">提交审核</button>
+        </div>
+        <div id="out-text" class="result" style="display:none;"></div>
+      </div>
+
+      <div class="card">
+        <h2 id="i18n-card-file-title">文件</h2>
+        <div class="file-zone">
+          <span id="i18n-file-zone-desc">可选一个或多个文件，上传后由系统自动识别类型并审核。</span>
+          <div class="file-zone-pick">
+            <input type="file" id="file-input" class="file-input-hidden" multiple tabindex="-1" />
+            <button type="button" class="secondary sm" id="btn-file-pick">选择文件</button>
+            <span id="file-selected-names" aria-live="polite"></span>
+          </div>
+        </div>
+        <div class="actions">
+          <button type="button" id="btn-file" disabled>上传并审核</button>
+        </div>
+        <div id="out-file" class="result" style="display:none;"></div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:1.25rem;">
+      <h2 id="i18n-card-session-title" style="font-size:0.85rem; color:var(--muted); font-weight:600;">对话与会话</h2>
+      <p class="meta" id="i18n-card-session-meta" style="margin-top:0;">连续提交会在同一段对话里关联上下文；需要重新开始时点下面按钮。</p>
+      <div class="session-bar">
+        <button type="button" class="secondary" id="btn-new-session">开始新对话</button>
+        <span class="meta" id="session-feedback" style="margin:0;" aria-live="polite"></span>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:1.25rem;">
+      <h2 id="i18n-card-runs-title">审核历史</h2>
+      <p class="meta" id="i18n-card-runs-meta" style="margin:0 0 0.5rem;">SQLite 审计记录（<code class="mono-cell">GET /v1/runs</code>），点击一行看详情。</p>
+      <div class="actions" style="margin-top:0;">
+        <button type="button" class="secondary sm" id="btn-refresh-runs">刷新列表</button>
+      </div>
+      <div id="runs-body" class="obs-body"><p class="meta" id="i18n-runs-loading">加载中…</p></div>
+      <div id="run-detail-panel" aria-live="polite"></div>
+    </div>
+  </div>
+
+  <div id="llm-settings-modal" aria-hidden="true">
+    <div class="modal-backdrop" id="llm-settings-backdrop" tabindex="-1"></div>
+    <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="llm-settings-title">
+      <div class="modal-head">
+        <h2 id="llm-settings-title">模型配置</h2>
+        <button type="button" class="modal-close" id="llm-settings-close" aria-label="关闭">×</button>
+      </div>
+      <p class="meta" style="margin-top:0;">通过服务端 <code class="mono-cell">PATCH /v1/config/llm</code> 更新并热加载；密钥不会回显，仅在填写时覆盖。</p>
+      <form id="llm-settings-form">
+        <div class="form-row">
+          <label for="cfg-provider">provider</label>
+          <input type="text" id="cfg-provider" name="provider" autocomplete="off" />
+        </div>
+        <div class="form-row">
+          <label for="cfg-model">model</label>
+          <input type="text" id="cfg-model" name="model" autocomplete="off" />
+        </div>
+        <div class="form-row">
+          <label for="cfg-api-base">api_base</label>
+          <input type="text" id="cfg-api-base" name="api_base" placeholder="留空则各通道默认" autocomplete="off" />
+        </div>
+        <div class="form-row">
+          <label for="cfg-temperature">temperature</label>
+          <input type="text" id="cfg-temperature" name="temperature" inputmode="decimal" autocomplete="off" />
+        </div>
+        <div class="form-row">
+          <label for="cfg-max-tokens">max_tokens</label>
+          <input type="text" id="cfg-max-tokens" name="max_tokens" inputmode="numeric" autocomplete="off" />
+        </div>
+        <div class="form-row">
+          <label for="cfg-timeout">timeout（秒）</label>
+          <input type="text" id="cfg-timeout" name="timeout" inputmode="numeric" autocomplete="off" />
+        </div>
+        <div class="form-row">
+          <label for="cfg-minimax">minimax_group_id</label>
+          <input type="text" id="cfg-minimax" name="minimax_group_id" autocomplete="off" />
+        </div>
+        <div class="form-row">
+          <label for="cfg-api-key">api_key</label>
+          <input type="password" id="cfg-api-key" name="api_key" autocomplete="new-password" placeholder="不修改请留空" />
+        </div>
+        <p id="llm-settings-status" class="meta" style="margin-bottom:0.5rem;" role="status"></p>
+        <div class="modal-actions">
+          <button type="submit" id="llm-settings-save">保存</button>
+          <button type="button" class="secondary" id="llm-settings-cancel">取消</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="display-settings-modal" aria-hidden="true">
+    <div class="modal-backdrop" id="display-settings-backdrop" tabindex="-1"></div>
+    <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="display-settings-title">
+      <div class="modal-head">
+        <h2 id="display-settings-title">报告与展示</h2>
+        <button type="button" class="modal-close" id="display-settings-close" aria-label="关闭">×</button>
+      </div>
+      <p class="meta" style="margin-top:0;">与模型配置独立；<code class="mono-cell">PATCH /v1/config/display</code>。后续可在此扩展其它展示项。</p>
+      <form id="display-settings-form">
+        <div class="form-row">
+          <label for="cfg-display-locale">报告语言</label>
+          <select id="cfg-display-locale" name="report_locale">
+            <option value="zh">中文</option>
+            <option value="en">English</option>
+          </select>
+        </div>
+        <p id="display-settings-status" class="meta" style="margin-bottom:0.5rem;" role="status"></p>
+        <div class="modal-actions">
+          <button type="submit" id="display-settings-save">保存</button>
+          <button type="button" class="secondary" id="display-settings-cancel">取消</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script>
+(function () {
+  /**
+   * 页面在 /ui 或 /prefix/ui 下时，API 与之一致（反代子路径部署）。
+   * 例：pathname /reviewagent/ui/ → 根前缀 /reviewagent
+   */
+  function apiRoot() {
+    var path = window.location.pathname || "/";
+    var ix = path.indexOf("/ui/");
+    if (ix === 0) return "";
+    if (ix > 0) return path.slice(0, ix).replace(/\/+$/, "") || "";
+    var trimmed = path.replace(/\/+$/, "");
+    if (trimmed === "/ui" || trimmed.endsWith("/ui")) {
+      return trimmed.length <= 3 ? "" : trimmed.slice(0, -3).replace(/\/+$/, "");
+    }
+    return "";
+  }
+  function apiUrl(path) {
+    var rel = path.charAt(0) === "/" ? path : "/" + path;
+    var root = apiRoot();
+    return root ? root + rel : rel;
+  }
+
+  function headers() {
+    const sid = (document.getElementById("session-id").value || "").trim();
+    const h = { "Content-Type": "application/json" };
+    if (sid) h["X-Review-Session"] = sid;
+    return h;
+  }
+
+  /** 与后端 report_locale 一致，驱动整页 UI + 报告文案 */
+  var REPORT_LOCALE = "zh";
+  var PAGE_UI = {
+    zh: {
+      pageTitle: "内容审核",
+      pageSub: "提交文字或文件，获取审核结论。请确保内容合法合规，并遵守所在平台与管理要求。",
+      healthOk: "可用",
+      healthBad: "不可用",
+      healthChecking: "检查中…",
+      btnDisplayTitle: "界面语言与展示",
+      btnDisplayAria: "打开界面语言与展示设置",
+      btnLlmTitle: "模型设置（LLM）",
+      btnLlmAria: "打开模型设置",
+      cardTextTitle: "输入内容",
+      cardTextMeta: "支持文本、图片路径或视频路径，系统会自动识别内容类型。",
+      labelTextBody: "待审核内容",
+      phTextBody: "请粘贴需要审核的文字…",
+      btnTextSubmit: "提交审核",
+      cardFileTitle: "文件",
+      fileZoneDesc: "可选一个或多个文件，上传后由系统自动识别类型并审核。",
+      filePickButton: "选择文件",
+      filePickAria: "选择要上传的本地文件，可多选",
+      fileNoneChosen: "未选择任何文件",
+      btnFileSubmit: "上传并审核",
+      cardSessionTitle: "对话与会话",
+      cardSessionMeta: "连续提交会在同一段对话里关联上下文；需要重新开始时点下面按钮。",
+      btnNewSession: "开始新对话",
+      cardRunsTitle: "审核历史",
+      runsLoading: "加载中…",
+      btnRefreshRuns: "刷新列表",
+      llmModalTitle: "模型配置",
+      llmModalMeta: "通过服务端 <code class=\"mono-cell\">PATCH /v1/config/llm</code> 更新并热加载；密钥不会回显，仅在填写时覆盖。",
+      llmPhApiBase: "留空则各通道默认",
+      llmLabelTimeout: "timeout（秒）",
+      llmPhApiKey: "不修改请留空",
+      llmSave: "保存",
+      llmCancel: "取消",
+      closeAria: "关闭",
+      displayModalTitle: "界面与展示",
+      displayModalMeta: "与模型配置独立；<code class=\"mono-cell\">PATCH /v1/config/display</code>。影响整页语言与审核报告用语。",
+      displayLocaleLabel: "界面语言",
+      displayOptZh: "中文",
+      displayOptEn: "English",
+      displaySave: "保存",
+      displayCancel: "取消",
+      tryLater: "请稍后重试。",
+      processing: "正在处理，请稍候…",
+      uploading: "正在上传并处理，请稍候…",
+      loadingDetail: "加载详情…",
+      loadingCfg: "正在加载…",
+      loadFail: "加载失败：",
+      saveDone: "已保存并热加载。",
+      waitCfgLoad: "请先等待配置加载完成。",
+      cfgNotLoaded: "配置尚未加载，请稍后或关闭后重试。",
+      noChanges: "没有修改任何字段。",
+      noRecords: "暂无记录。审核成功写入 SQLite（<code>storage.review_db_path</code>）后将显示在此。",
+      histSub: "审核结构化结果",
+      sessionNewOk: "已开始新对话。",
+      copyReport: "复制报告",
+      copyFull: "复制全文",
+      resultProse: "原文",
+      noDetail: "未收到具体说明，请重试或联系管理员。",
+      runsMetaHtml: "SQLite 审计记录（<code class=\"mono-cell\">GET /v1/runs</code>），点击一行看详情。",
+      noChangesShort: "没有修改。",
+      copyDone: "已复制",
+      copyFailed: "复制失败",
+      copyRunDetail: "复制报告文本",
+      modelRaw: "模型原文",
+      runColTime: "时间",
+      runColStatus: "状态",
+      runColType: "类型",
+      runColDuration: "耗时",
+      runColModel: "模型",
+      runColSummary: "摘要",
+      runKvTime: "时间",
+      runKvStatus: "状态",
+      runKvContentType: "内容类型",
+      runKvDuration: "耗时",
+      runKvIterations: "轮次",
+      runKvModel: "模型",
+      runKvInputSummary: "输入摘要",
+      runKvError: "错误",
+      batchCopyAll: "复制全部报告",
+      batchNoResult: "没有可展示的结果。",
+      batchSource: "来源:",
+      batchNoConclusion: "本文件暂无文字结论。",
+      batchNoConclusionPlain: "（无结论）",
+      batchLine: "—— 来源: {label} ——",
+      batchTitle: "【批量检测】共 {n} 项：{detail} → 整体：{overall}",
+      batchFail: "失败",
+      batchOther: "其它",
+      batchNoBreakdown: "无分项",
+      batchOverallBlock: "不通过",
+      batchOverallReview: "待复核",
+      batchOverallPass: "通过",
+      fileOrdinal: "第 {n} 个文件",
+      sessionSwitchHint: "已切换为新对话（服务端记忆已尽力释放）",
+      llmKeyPhConfigured: "已配置，留空不修改",
+      llmKeyPhOptional: "可选",
+      llmErrTemperature: "temperature 须为数字",
+      llmErrMaxTokens: "max_tokens 须为整数",
+      llmErrTimeout: "timeout 须为整数",
+    },
+    en: {
+      pageTitle: "Content review",
+      pageSub: "Submit text or files for review. Ensure content complies with laws and platform rules.",
+      healthOk: "OK",
+      healthBad: "Down",
+      healthChecking: "Checking…",
+      btnDisplayTitle: "Language & display",
+      btnDisplayAria: "Open language and display settings",
+      btnLlmTitle: "Model (LLM) settings",
+      btnLlmAria: "Open model settings",
+      cardTextTitle: "Text input",
+      cardTextMeta: "Text, image path, or video path — type is detected automatically.",
+      labelTextBody: "Content to review",
+      phTextBody: "Paste text to review…",
+      btnTextSubmit: "Submit",
+      cardFileTitle: "Files",
+      fileZoneDesc: "Select one or more files; type is detected automatically.",
+      filePickButton: "Choose files",
+      filePickAria: "Choose local files to upload (multiple allowed)",
+      fileNoneChosen: "No file chosen",
+      btnFileSubmit: "Upload & review",
+      cardSessionTitle: "Conversation",
+      cardSessionMeta: "Submissions share context in one conversation. Use the button below to start over.",
+      btnNewSession: "New conversation",
+      cardRunsTitle: "History",
+      runsLoading: "Loading…",
+      btnRefreshRuns: "Refresh",
+      llmModalTitle: "Model (LLM)",
+      llmModalMeta: "Updates via <code class=\"mono-cell\">PATCH /v1/config/llm</code> with hot reload. API key is not shown; only overwritten when set.",
+      llmPhApiBase: "empty = provider default",
+      llmLabelTimeout: "timeout (sec)",
+      llmPhApiKey: "leave empty to keep",
+      llmSave: "Save",
+      llmCancel: "Cancel",
+      closeAria: "Close",
+      displayModalTitle: "Display & language",
+      displayModalMeta: "Separate from model settings. <code class=\"mono-cell\">PATCH /v1/config/display</code>. Controls page language and report wording.",
+      displayLocaleLabel: "UI language",
+      displayOptZh: "中文",
+      displayOptEn: "English",
+      displaySave: "Save",
+      displayCancel: "Cancel",
+      tryLater: "Please try again later.",
+      processing: "Processing…",
+      uploading: "Uploading and processing…",
+      loadingDetail: "Loading detail…",
+      loadingCfg: "Loading…",
+      loadFail: "Load failed: ",
+      saveDone: "Saved and reloaded.",
+      waitCfgLoad: "Wait for settings to load.",
+      cfgNotLoaded: "Settings not loaded yet; close and retry.",
+      noChanges: "No changes.",
+      noRecords: "No rows yet. Successful reviews are written to SQLite (<code>storage.review_db_path</code>).",
+      histSub: "Structured review",
+      sessionNewOk: "New conversation started.",
+      copyReport: "Copy report",
+      copyFull: "Copy all",
+      resultProse: "Raw",
+      noDetail: "No response body; retry or contact an admin.",
+      runsMetaHtml: "SQLite audit (<code class=\"mono-cell\">GET /v1/runs</code>). Click a row for details.",
+      noChangesShort: "No changes.",
+      copyDone: "Copied",
+      copyFailed: "Copy failed",
+      copyRunDetail: "Copy report text",
+      modelRaw: "Model output",
+      runColTime: "Time",
+      runColStatus: "Status",
+      runColType: "Type",
+      runColDuration: "Duration",
+      runColModel: "Model",
+      runColSummary: "Summary",
+      runKvTime: "Time",
+      runKvStatus: "Status",
+      runKvContentType: "Content type",
+      runKvDuration: "Duration",
+      runKvIterations: "Rounds",
+      runKvModel: "Model",
+      runKvInputSummary: "Input summary",
+      runKvError: "Error",
+      batchCopyAll: "Copy all reports",
+      batchNoResult: "Nothing to show.",
+      batchSource: "Source:",
+      batchNoConclusion: "No text conclusion for this file.",
+      batchNoConclusionPlain: "(no conclusion)",
+      batchLine: "—— Source: {label} ——",
+      batchTitle: "[Batch] {n} item(s): {detail} → overall: {overall}",
+      batchFail: "fail",
+      batchOther: "other",
+      batchNoBreakdown: "none",
+      batchOverallBlock: "rejected",
+      batchOverallReview: "needs review",
+      batchOverallPass: "passed",
+      fileOrdinal: "File {n}",
+      sessionSwitchHint: "Switched to a new conversation (server memory cleared where possible).",
+      llmKeyPhConfigured: "configured; leave blank to keep",
+      llmKeyPhOptional: "optional",
+      llmErrTemperature: "temperature must be a number",
+      llmErrMaxTokens: "max_tokens must be an integer",
+      llmErrTimeout: "timeout must be an integer",
+    },
+  };
+
+  function getReportLocale() {
+    return REPORT_LOCALE === "en" ? "en" : "zh";
+  }
+
+  function uiStr(key) {
+    var loc = getReportLocale();
+    var t = PAGE_UI[loc];
+    return (t && t[key]) || PAGE_UI.zh[key] || key;
+  }
+
+  function uiStrFmt(key, map) {
+    var s = uiStr(key);
+    if (!map) return s;
+    Object.keys(map).forEach(function (k) {
+      s = s.split("{" + k + "}").join(String(map[k]));
+    });
+    return s;
+  }
+
+  function updateFilePickHint() {
+    var inp = document.getElementById("file-input");
+    var el = document.getElementById("file-selected-names");
+    if (!inp || !el) return;
+    var files = inp.files;
+    if (!files || files.length === 0) {
+      el.textContent = uiStr("fileNoneChosen");
+      return;
+    }
+    var names = [];
+    for (var i = 0; i < files.length; i++) names.push(files[i].name);
+    var s = names.join(", ");
+    if (s.length > 140) s = s.slice(0, 137) + "…";
+    el.textContent = s;
+  }
+
+  var _llmCfgInitial = null;
+
+  function applyPageUiLocale() {
+    document.documentElement.lang = getReportLocale() === "en" ? "en" : "zh-CN";
+    document.title = uiStr("pageTitle");
+    var el;
+    if ((el = document.getElementById("i18n-page-title"))) el.textContent = uiStr("pageTitle");
+    if ((el = document.getElementById("i18n-page-sub"))) el.textContent = uiStr("pageSub");
+    var bd = document.getElementById("btn-display-settings");
+    if (bd) {
+      bd.title = uiStr("btnDisplayTitle");
+      bd.setAttribute("aria-label", uiStr("btnDisplayAria"));
+    }
+    var bl = document.getElementById("btn-llm-settings");
+    if (bl) {
+      bl.title = uiStr("btnLlmTitle");
+      bl.setAttribute("aria-label", uiStr("btnLlmAria"));
+    }
+    if ((el = document.getElementById("i18n-card-text-title"))) el.textContent = uiStr("cardTextTitle");
+    if ((el = document.getElementById("i18n-card-text-meta"))) el.textContent = uiStr("cardTextMeta");
+    if ((el = document.getElementById("i18n-label-text-body"))) el.textContent = uiStr("labelTextBody");
+    var tb = document.getElementById("text-body");
+    if (tb) tb.placeholder = uiStr("phTextBody");
+    if ((el = document.getElementById("btn-text"))) el.textContent = uiStr("btnTextSubmit");
+    if ((el = document.getElementById("i18n-card-file-title"))) el.textContent = uiStr("cardFileTitle");
+    if ((el = document.getElementById("i18n-file-zone-desc"))) el.textContent = uiStr("fileZoneDesc");
+    var fp = document.getElementById("btn-file-pick");
+    if (fp) {
+      fp.textContent = uiStr("filePickButton");
+      fp.setAttribute("aria-label", uiStr("filePickAria"));
+    }
+    updateFilePickHint();
+    if ((el = document.getElementById("btn-file"))) el.textContent = uiStr("btnFileSubmit");
+    if ((el = document.getElementById("i18n-card-session-title"))) el.textContent = uiStr("cardSessionTitle");
+    if ((el = document.getElementById("i18n-card-session-meta"))) el.textContent = uiStr("cardSessionMeta");
+    if ((el = document.getElementById("btn-new-session"))) el.textContent = uiStr("btnNewSession");
+    if ((el = document.getElementById("i18n-card-runs-title"))) el.textContent = uiStr("cardRunsTitle");
+    if ((el = document.getElementById("i18n-card-runs-meta"))) el.innerHTML = uiStr("runsMetaHtml");
+    if ((el = document.getElementById("btn-refresh-runs"))) el.textContent = uiStr("btnRefreshRuns");
+    if ((el = document.getElementById("llm-settings-title"))) el.textContent = uiStr("llmModalTitle");
+    var lmm = document.querySelector("#llm-settings-modal .modal-head + .meta");
+    if (lmm) lmm.innerHTML = uiStr("llmModalMeta");
+    var cab = document.getElementById("cfg-api-base");
+    if (cab) cab.placeholder = uiStr("llmPhApiBase");
+    var cto = document.querySelector('label[for="cfg-timeout"]');
+    if (cto) cto.textContent = uiStr("llmLabelTimeout");
+    var ckey = document.getElementById("cfg-api-key");
+    if (ckey) {
+      if (_llmCfgInitial && _llmCfgInitial.api_key_configured) ckey.placeholder = uiStr("llmKeyPhConfigured");
+      else if (_llmCfgInitial) ckey.placeholder = uiStr("llmKeyPhOptional");
+      else ckey.placeholder = uiStr("llmPhApiKey");
+    }
+    if ((el = document.getElementById("llm-settings-save"))) el.textContent = uiStr("llmSave");
+    if ((el = document.getElementById("llm-settings-cancel"))) el.textContent = uiStr("llmCancel");
+    if ((el = document.getElementById("llm-settings-close"))) el.setAttribute("aria-label", uiStr("closeAria"));
+    if ((el = document.getElementById("display-settings-title"))) el.textContent = uiStr("displayModalTitle");
+    var dmm = document.querySelector("#display-settings-modal .modal-head + .meta");
+    if (dmm) dmm.innerHTML = uiStr("displayModalMeta");
+    if ((el = document.querySelector('label[for="cfg-display-locale"]'))) el.textContent = uiStr("displayLocaleLabel");
+    var dsel = document.getElementById("cfg-display-locale");
+    if (dsel) {
+      var o0 = dsel.querySelector('option[value="zh"]');
+      var o1 = dsel.querySelector('option[value="en"]');
+      if (o0) o0.textContent = uiStr("displayOptZh");
+      if (o1) o1.textContent = uiStr("displayOptEn");
+    }
+    if ((el = document.getElementById("display-settings-save"))) el.textContent = uiStr("displaySave");
+    if ((el = document.getElementById("display-settings-cancel"))) el.textContent = uiStr("displayCancel");
+    if ((el = document.getElementById("display-settings-close"))) el.setAttribute("aria-label", uiStr("closeAria"));
+    var hd = document.getElementById("health-dot");
+    var htt = document.getElementById("health-text");
+    if (hd && htt) {
+      if (hd.classList.contains("ok")) htt.textContent = uiStr("healthOk");
+      else if (hd.classList.contains("bad")) htt.textContent = uiStr("healthBad");
+      else htt.textContent = uiStr("healthChecking");
+    }
+    var rlp = document.getElementById("i18n-runs-loading");
+    if (rlp) rlp.textContent = uiStr("runsLoading");
+    if (typeof refreshRuns === "function") {
+      var rb = document.getElementById("runs-body");
+      if (rb && rb.querySelector("table.runs-table")) refreshRuns();
+    }
+  }
+
+  function newSessionId() {
+    if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+    return "sess-" + Math.random().toString(36).slice(2) + Date.now().toString(36);
+  }
+
+  document.getElementById("session-id").value = newSessionId();
+
+  document.getElementById("btn-new-session").addEventListener("click", async function () {
+    const btn = this;
+    const hint = document.getElementById("session-feedback");
+    const old = (document.getElementById("session-id").value || "").trim();
+    const prevLabel = btn.textContent;
+    btn.disabled = true;
+    if (hint) hint.textContent = "";
+    try {
+      if (old) {
+        const ctrl = new AbortController();
+        const tid = setTimeout(function () {
+          ctrl.abort();
+        }, 8000);
+        try {
+          await fetch(apiUrl("/v1/sessions/" + encodeURIComponent(old)), {
+            method: "DELETE",
+            signal: ctrl.signal,
+          });
+        } catch (e) {
+          /* 网络错误仍切换本地会话，避免按钮一直无响应 */
+        } finally {
+          clearTimeout(tid);
+        }
+      }
+    } finally {
+      document.getElementById("session-id").value = newSessionId();
+      btn.disabled = false;
+      btn.textContent = prevLabel;
+      if (hint) {
+        var switchMsg = uiStr("sessionSwitchHint");
+        hint.textContent = switchMsg;
+        setTimeout(function () {
+          if (hint.textContent === switchMsg) hint.textContent = "";
+        }, 4000);
+      }
+    }
+  });
+
+  function syncReportLocaleFromHealthPayload(h) {
+    if (h && (h.report_locale === "zh" || h.report_locale === "en")) {
+      REPORT_LOCALE = h.report_locale;
+    } else {
+      REPORT_LOCALE = "zh";
+    }
+  }
+
+  async function pingHealth() {
+    const dot = document.getElementById("health-dot");
+    const ctrl = new AbortController();
+    const tid = setTimeout(function () { ctrl.abort(); }, 10000);
+    try {
+      const r = await fetch(apiUrl("/health"), { signal: ctrl.signal, cache: "no-store" });
+      if (!r.ok) throw new Error(String(r.status));
+      const h = await r.json().catch(function () { return null; });
+      syncReportLocaleFromHealthPayload(h);
+      dot.className = "dot ok";
+      applyPageUiLocale();
+    } catch (e) {
+      dot.className = "dot bad";
+      applyPageUiLocale();
+    } finally {
+      clearTimeout(tid);
+    }
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  function detailMessage(data) {
+    if (!data || typeof data !== "object") return uiStr("tryLater");
+    const d = data.detail;
+    const sep = getReportLocale() === "en" ? "; " : "；";
+    if (typeof d === "string") return d;
+    if (Array.isArray(d)) return d.map(function (x) { return x.msg || JSON.stringify(x); }).join(sep);
+    if (d != null) return JSON.stringify(d);
+    return uiStr("tryLater");
+  }
+
+  var TYPE_LABELS_ZH = {
+    porn: "色情内容", violence: "暴力血腥", hate: "仇恨言论", illegal: "违法信息",
+    harass: "骚扰霸凌", misinfo: "虚假信息", privacy: "隐私侵犯", spam: "垃圾广告",
+    dangerous: "危险行为", self_harm: "自残自杀", normal: "正常内容",
+    wordlist: "敏感词表命中", image_phash: "图像指纹封禁", sensitive_word: "敏感词",
+    banned_word: "禁用词",     violation_word: "违规词", violation: "违规内容"
+  };
+  var TYPE_LABELS_EN = {
+    porn: "Pornographic content", violence: "Violence / gore", hate: "Hate speech",
+    illegal: "Illegal content", harass: "Harassment", misinfo: "Misinformation",
+    privacy: "Privacy violation", spam: "Spam", dangerous: "Dangerous acts",
+    self_harm: "Self-harm / suicide", normal: "Normal content",
+    wordlist: "Sensitive wordlist hit", image_phash: "Image fingerprint block",
+    sensitive_word: "Sensitive word", banned_word: "Banned word",
+    violation_word: "Violation word", violation: "Policy violation"
+  };
+  var POSITION_LABELS_ZH = {
+    ocr_text: "读字分支", vision: "看图分支", ocr_text_llm: "读字分支", vision_llm: "看图分支",
+    llm_ocr_text: "读字分支", llm_vision_pixels: "看图分支", image: "图片", text: "文本"
+  };
+  var POSITION_LABELS_EN = {
+    ocr_text: "OCR-text branch", vision: "Vision branch", ocr_text_llm: "OCR-text branch",
+    vision_llm: "Vision branch", llm_ocr_text: "OCR-text branch",
+    llm_vision_pixels: "Vision branch", image: "Image", text: "Text"
+  };
+  var SKIP_SUMMARY_TYPE = { "dual_branch_disagreement": 1, "wordlist": 1 };
+
+  function typeLabelsMap() {
+    return getReportLocale() === "en" ? TYPE_LABELS_EN : TYPE_LABELS_ZH;
+  }
+
+  function positionLabelsMap() {
+    return getReportLocale() === "en" ? POSITION_LABELS_EN : POSITION_LABELS_ZH;
+  }
+
+  function reportChrome() {
+    if (getReportLocale() === "en") {
+      return {
+        violationTypes: "Violation types",
+        noneTypes: "None",
+        unspecified: "Unspecified",
+        verdict: "Review result",
+        confidence: "Confidence",
+        capability: "Capability",
+        summary: "Summary",
+        violations: "Violations",
+        degradedPrefix: "Degraded: ",
+        sepTypes: ", ",
+        auditRunId: "Audit run_id",
+        durationMs: "Duration",
+        toolIterations: "Tool rounds",
+        metaRoundPrefix: "Round "
+      };
+    }
+    return {
+      violationTypes: "违规类型",
+      noneTypes: "无",
+      unspecified: "未标明",
+      verdict: "审核结果",
+      confidence: "置信度",
+      capability: "能力状态",
+      summary: "摘要",
+      violations: "违规项",
+      degradedPrefix: "降级：",
+      sepTypes: "、",
+      auditRunId: "审计 run_id",
+      durationMs: "耗时",
+      toolIterations: "工具轮次",
+      metaRoundPrefix: "轮次 "
+    };
+  }
+
+  function categoriesFromViolations(viol) {
+    if (!Array.isArray(viol)) return [];
+    var seen = {}, out = [];
+    var map = typeLabelsMap();
+    for (var i = 0; i < viol.length; i++) {
+      var t = viol[i] && viol[i].type;
+      if (!t) continue;
+      var tl = String(t).toLowerCase();
+      if (SKIP_SUMMARY_TYPE[tl] || seen[tl]) continue;
+      seen[tl] = 1;
+      out.push(map[tl] || String(t));
+    }
+    return out;
+  }
+
+  function formatViolationTypesLine(parsed) {
+    if (!parsed || typeof parsed !== "object") return "";
+    var chrome = reportChrome();
+    var verdict = (parsed.verdict != null ? String(parsed.verdict) : "").toUpperCase();
+    var cats = [];
+    if (Array.isArray(parsed.violation_type_labels) && parsed.violation_type_labels.length) {
+      cats = parsed.violation_type_labels.slice();
+    } else {
+      cats = categoriesFromViolations(parsed.violations);
+    }
+    if ((verdict === "WARN" || verdict === "BLOCK") && !cats.length) {
+      cats = [chrome.unspecified];
+    }
+    if (verdict === "PASS" && !cats.length) {
+      return "<li><strong>" + escapeHtml(chrome.violationTypes) + "</strong>" + escapeHtml(chrome.noneTypes) + "</li>";
+    }
+    if (!cats.length) return "";
+    return "<li><strong>" + escapeHtml(chrome.violationTypes) + "</strong>" + escapeHtml(cats.join(chrome.sepTypes)) + "</li>";
+  }
+
+  function parseResponseJson(prose) {
+    if (prose == null || typeof prose !== "string") return null;
+    var s = prose.trim();
+    if (!s) return null;
+    try { return JSON.parse(s); } catch (e1) {}
+    var m = s.match(/\{[\s\S]*\}/);
+    if (m) { try { return JSON.parse(m[0]); } catch (e2) {} }
+    return null;
+  }
+
+  function labelViolationPosition(pos) {
+    if (pos == null || !String(pos).trim()) return "";
+    var k = String(pos).trim().toLowerCase();
+    return positionLabelsMap()[k] || String(pos);
+  }
+
+  function labelViolationSeverity(sev) {
+    var s = String(sev != null ? sev : "").trim().toLowerCase();
+    if (!s) return "";
+    if (getReportLocale() === "en") {
+      if (s === "high" || s === "medium" || s === "low") {
+        return s.charAt(0).toUpperCase() + s.slice(1);
+      }
+      return String(sev).trim();
+    }
+    var zh = { high: "高", medium: "中", low: "低" };
+    return zh[s] || String(sev).trim();
+  }
+
+  function formatViolationPositionForReport(pos) {
+    var s = String(pos != null ? pos : "").trim();
+    if (!s) return "";
+    var loc = getReportLocale();
+    var m1 = /^frames\s+(\d+)-(\d+)\s+\((\d+)\s+sampled-frame hits merged\)\s*$/i.exec(s);
+    if (m1) {
+      if (loc === "en") {
+        return "Frames " + m1[1] + "–" + m1[2] + " (" + m1[3] + " sampled hits merged)";
+      }
+      return "第" + m1[1] + "–" + m1[2] + " 帧（" + m1[3] + " 次采样命中已合并）";
+    }
+    var m2 = /^frame\s+(\d+)\s*$/i.exec(s);
+    if (m2) {
+      return loc === "en" ? ("Frame " + m2[1]) : ("第 " + m2[1] + " 帧");
+    }
+    return labelViolationPosition(pos);
+  }
+
+  function formatViolationRowItem(item) {
+    if (!item || typeof item !== "object") return "";
+    var sev = labelViolationSeverity(item.severity);
+    var tRaw = item.type != null ? String(item.type) : "";
+    var unspec = getReportLocale() === "en" ? "Unspecified" : "未标明";
+    var typeL = typeLabelsMap()[tRaw.toLowerCase()] || tRaw || unspec;
+    var c = item.content != null ? String(item.content) : "";
+    var posRaw = item.position;
+    var extra = "";
+    if (posRaw != null && String(posRaw).trim()) {
+      var posL = formatViolationPositionForReport(posRaw);
+      if (posL && posL.toLowerCase() !== String(typeL).toLowerCase()) {
+        extra = " · " + posL;
+      }
+    }
+    return "  · [" + sev + "] " + typeL + extra + ": " + c;
+  }
+
+  function verdictCssClass(verdict) {
+    var v = (verdict != null ? String(verdict) : "").toUpperCase();
+    if (v === "PASS") return "verdict-pass";
+    if (v === "WARN") return "verdict-warn";
+    if (v === "BLOCK") return "verdict-block";
+    return "verdict-unknown";
+  }
+
+  /** @param {object} meta run_id, duration_ms, iterations */
+  function capabilityStatusText(parsed) {
+    if (!parsed || typeof parsed !== "object") return "";
+    if (parsed.capability_status != null) {
+      var s = String(parsed.capability_status).trim();
+      if (s) return s;
+    }
+    if (Array.isArray(parsed.degraded_labels) && parsed.degraded_labels.length) {
+      var sep = getReportLocale() === "en" ? "; " : "；";
+      return reportChrome().degradedPrefix + parsed.degraded_labels.map(function (x) { return String(x); }).join(sep);
+    }
+    return "";
+  }
+
+  /** @param {object} meta run_id, duration_ms, iterations */
+  function buildPlainTextReport(parsed, meta) {
+    var chrome = reportChrome();
+    var lines = [];
+    if (meta && meta.run_id) lines.push(chrome.auditRunId + ": " + meta.run_id);
+    if (meta != null && meta.duration_ms != null) {
+      lines.push(chrome.durationMs + ": " + meta.duration_ms + " ms");
+    }
+    if (meta != null && meta.iterations != null) {
+      lines.push(chrome.toolIterations + ": " + meta.iterations);
+    }
+    if (lines.length) lines.push("");
+    if (!parsed || typeof parsed !== "object") return lines.join("\n").replace(/\n$/, "");
+    if (parsed.verdict != null) lines.push(chrome.verdict + ": " + parsed.verdict);
+    var cats = [];
+    if (Array.isArray(parsed.violation_type_labels) && parsed.violation_type_labels.length) {
+      cats = parsed.violation_type_labels.slice();
+    } else {
+      cats = categoriesFromViolations(parsed.violations);
+    }
+    var verU = (parsed.verdict != null ? String(parsed.verdict) : "").toUpperCase();
+    if ((verU === "WARN" || verU === "BLOCK") && !cats.length) cats = [chrome.unspecified];
+    if (verU === "PASS" && !cats.length) {
+      lines.push(chrome.violationTypes + ": " + chrome.noneTypes);
+    } else if (cats.length) {
+      lines.push(chrome.violationTypes + ": " + cats.join(chrome.sepTypes));
+    }
+    if (parsed.confidence != null) lines.push(chrome.confidence + ": " + parsed.confidence);
+    var capability = capabilityStatusText(parsed);
+    if (capability) lines.push(chrome.capability + ": " + capability);
+    var summary = (parsed.summary != null ? String(parsed.summary).trim() : "");
+    if (summary) {
+      lines.push("");
+      lines.push(chrome.summary + ":");
+      lines.push(summary);
+    }
+    var viol = parsed.violations;
+    if (Array.isArray(viol) && viol.length) {
+      lines.push("");
+      lines.push(chrome.violations + " (" + viol.length + "):");
+      for (var i = 0; i < viol.length; i++) {
+        lines.push(formatViolationRowItem(viol[i]));
+      }
+    }
+    return lines.join("\n");
+  }
+
+  function renderStructuredReportHtml(parsed, meta, opts) {
+    opts = opts || {};
+    var skipToolbar = !!opts.skipToolbar;
+    var v = parsed.verdict != null ? String(parsed.verdict) : "—";
+    var vCls = verdictCssClass(parsed.verdict);
+    var html = '<div class="report-head">';
+    html += '<span class="verdict ' + vCls + '">' + escapeHtml(v) + "</span>";
+    if (!skipToolbar) {
+      html +=
+        '<div class="report-actions"><button type="button" class="secondary sm btn-copy-report">' +
+        escapeHtml(uiStr("copyReport")) +
+        "</button></div>";
+    }
+    html += "</div>";
+    var rchrome = reportChrome();
+    var metaBits = [];
+    if (meta && meta.run_id) metaBits.push("run_id: " + meta.run_id);
+    if (meta != null && meta.iterations != null) {
+      metaBits.push(rchrome.metaRoundPrefix + meta.iterations);
+    }
+    if (meta != null && meta.duration_ms != null) metaBits.push(meta.duration_ms + " ms");
+    if (metaBits.length) {
+      html += '<p class="report-meta">' + escapeHtml(metaBits.join(" · ")) + "</p>";
+    }
+    var typeLine = formatViolationTypesLine(parsed);
+    if (typeLine) {
+      html += '<div class="report-block"><ul class="review-summary">' + typeLine + "</ul></div>";
+    }
+    if (parsed.confidence != null) {
+      html += '<div class="report-block"><h3>' + escapeHtml(rchrome.confidence) + "</h3><p class=\"summary-text\">" + escapeHtml(String(parsed.confidence)) + "</p></div>";
+    }
+    var capability = capabilityStatusText(parsed);
+    if (capability) {
+      html += '<div class="report-block"><h3>' + escapeHtml(rchrome.capability) + "</h3><p class=\"summary-text\">" + escapeHtml(capability) + "</p></div>";
+    }
+    var summary = (parsed.summary != null ? String(parsed.summary).trim() : "");
+    if (summary) {
+      html += '<div class="report-block"><h3>' + escapeHtml(rchrome.summary) + "</h3><p class=\"summary-text\">" + escapeHtml(summary) + "</p></div>";
+    }
+    var viol = parsed.violations;
+    if (Array.isArray(viol) && viol.length) {
+      html += '<div class="report-block"><h3>' + escapeHtml(rchrome.violations + " (" + viol.length + ")") + "</h3><ol class=\"violation-list\">";
+      for (var i = 0; i < viol.length; i++) {
+        var row = formatViolationRowItem(viol[i]);
+        html += "<li>" + escapeHtml(row.replace(/^\s*·\s*/, "")) + "</li>";
+      }
+      html += "</ol></div>";
+    }
+    return html;
+  }
+
+  function wireCopyReport(container) {
+    var btn = container.querySelector(".btn-copy-report");
+    if (!btn) return;
+    var text = container._plainReportText;
+    if (text == null || text === "") return;
+    btn.addEventListener("click", async function () {
+      var label = btn.textContent;
+      try {
+        await navigator.clipboard.writeText(text);
+        btn.textContent = uiStr("copyDone");
+        setTimeout(function () { btn.textContent = label; }, 1600);
+      } catch (err) {
+        btn.textContent = uiStr("copyFailed");
+        setTimeout(function () { btn.textContent = label; }, 2000);
+      }
+    });
+  }
+
+  function renderReviewResult(container, data) {
+    container.style.display = "block";
+    container._plainReportText = "";
+    var ok = data.success !== false && !data.error;
+    var prose = (data.response != null ? String(data.response) : "") || (data.error ? String(data.error) : "");
+    var meta = {
+      run_id: data.run_id != null ? String(data.run_id) : "",
+      duration_ms: data.duration_ms,
+      iterations: data.iterations
+    };
+    let html = "";
+    if (data.error && !ok) {
+      html += '<p class="result-prose err">' + escapeHtml(String(data.error)) + "</p>";
+      container.innerHTML = html;
+      return;
+    }
+    if (prose) {
+      var parsed = parseResponseJson(prose);
+      if (parsed && typeof parsed === "object" && parsed.verdict != null) {
+        html = renderStructuredReportHtml(parsed, meta);
+        container.innerHTML = html;
+        container._plainReportText = buildPlainTextReport(parsed, meta);
+        wireCopyReport(container);
+        return;
+      }
+      html +=
+        '<div class="report-head"><span class="verdict verdict-unknown">' +
+        escapeHtml(uiStr("resultProse")) +
+        "</span>";
+      html +=
+        '<div class="report-actions"><button type="button" class="secondary sm btn-copy-report">' +
+        escapeHtml(uiStr("copyFull")) +
+        "</button></div></div>";
+      html += '<p class="result-prose">' + escapeHtml(prose) + "</p>";
+      container.innerHTML = html;
+      container._plainReportText = prose;
+      wireCopyReport(container);
+      return;
+    }
+    html += '<p class="meta">' + escapeHtml(uiStr("noDetail")) + "</p>";
+    container.innerHTML = html;
+  }
+
+  function batchItemVerdict(item) {
+    if (item.success === false || (item.error != null && String(item.error).length)) return "ERROR";
+    var raw = item.response != null ? String(item.response) : "";
+    if (!raw.trim()) return "UNKNOWN";
+    try {
+      var o = JSON.parse(raw);
+      if (o && o.verdict != null) {
+        var v = String(o.verdict).toUpperCase();
+        if (v === "PASS" || v === "WARN" || v === "BLOCK") return v;
+      }
+    } catch (e2) {}
+    return "UNKNOWN";
+  }
+
+  function batchSourceLabel(item, i) {
+    if (item.path && String(item.path).trim()) return String(item.path).trim();
+    if (item.filename && String(item.filename).trim()) return String(item.filename).trim();
+    return uiStrFmt("fileOrdinal", { n: String(i + 1) });
+  }
+
+  function formatBatchSummary(results) {
+    var n = results.length;
+    var b = 0, w = 0, p = 0, e = 0, u = 0;
+    for (var i = 0; i < n; i++) {
+      var v = batchItemVerdict(results[i]);
+      if (v === "BLOCK") b++;
+      else if (v === "WARN") w++;
+      else if (v === "PASS") p++;
+      else if (v === "ERROR") e++;
+      else u++;
+    }
+    var tallies = [];
+    if (b) tallies.push("BLOCK×" + b);
+    if (w) tallies.push("WARN×" + w);
+    if (p) tallies.push("PASS×" + p);
+    if (e) tallies.push(uiStr("batchFail") + "×" + e);
+    if (u) tallies.push(uiStr("batchOther") + "×" + u);
+    var tallySep = getReportLocale() === "en" ? ", " : "、";
+    var detail = tallies.length ? tallies.join(tallySep) : uiStr("batchNoBreakdown");
+    var overall;
+    if (b > 0 || e > 0) overall = uiStr("batchOverallBlock");
+    else if (w > 0 || u > 0) overall = uiStr("batchOverallReview");
+    else overall = uiStr("batchOverallPass");
+    return uiStrFmt("batchTitle", { n: String(n), detail: detail, overall: overall });
+  }
+
+  function itemMetaFromBatch(item) {
+    return {
+      run_id: item.run_id != null ? String(item.run_id) : "",
+      duration_ms: item.duration_ms,
+      iterations: item.iterations
+    };
+  }
+
+  function renderBatchUser(container, data) {
+    container.style.display = "block";
+    container._plainReportText = "";
+    const results = data.results || [];
+    if (!results.length) {
+      container.innerHTML = '<p class="meta">' + escapeHtml(uiStr("batchNoResult")) + "</p>";
+      return;
+    }
+    var allPlain = [formatBatchSummary(results), ""];
+    let html = '<div class="batch-toolbar report-actions">';
+    html +=
+      '<button type="button" class="secondary sm" id="btn-copy-batch-all">' +
+      escapeHtml(uiStr("batchCopyAll")) +
+      "</button>";
+    html += "</div>";
+    html += '<p class="batch-summary">' + escapeHtml(formatBatchSummary(results)) + "</p>";
+    for (var i = 0; i < results.length; i++) {
+      var item = results[i];
+      var label = batchSourceLabel(item, i);
+      var blockPlain = uiStrFmt("batchLine", { label: label });
+      html += '<div class="batch-item">';
+      html +=
+        '<div class="batch-name"><span class="batch-src-key">' +
+        escapeHtml(uiStr("batchSource")) +
+        "</span> " +
+        escapeHtml(label) +
+        "</div>";
+      if (item.error) {
+        html += '<p class="result-prose err">' + escapeHtml(String(item.error)) + "</p>";
+        allPlain.push(blockPlain, String(item.error), "");
+      } else if (item.response != null && String(item.response).length) {
+        var pr = String(item.response);
+        var pj = parseResponseJson(pr);
+        html += '<div class="batch-report-card" id="batch-sub-' + i + '">';
+        if (pj && typeof pj === "object" && pj.verdict != null) {
+          var im = itemMetaFromBatch(item);
+          html += renderStructuredReportHtml(pj, im);
+          allPlain.push(blockPlain, buildPlainTextReport(pj, im), "");
+        } else {
+          html +=
+            '<div class="report-head"><span class="verdict verdict-unknown">' +
+            escapeHtml(uiStr("resultProse")) +
+            "</span>";
+          html +=
+            '<div class="report-actions"><button type="button" class="secondary sm btn-copy-report">' +
+            escapeHtml(uiStr("copyFull")) +
+            "</button></div></div>";
+          html += '<p class="result-prose">' + escapeHtml(pr) + "</p>";
+          allPlain.push(blockPlain, pr, "");
+        }
+        html += "</div>";
+      } else {
+        html += '<p class="meta">' + escapeHtml(uiStr("batchNoConclusion")) + "</p>";
+        allPlain.push(blockPlain, uiStr("batchNoConclusionPlain"), "");
+      }
+      html += "</div>";
+    }
+    container.innerHTML = html;
+    var plainJoined = allPlain.join("\n").trim();
+    container._plainReportText = plainJoined;
+    for (var j = 0; j < results.length; j++) {
+      var el = document.getElementById("batch-sub-" + j);
+      if (!el) continue;
+      var it = results[j];
+      var pr2 = it.response != null ? String(it.response) : "";
+      var pj2 = parseResponseJson(pr2);
+      var head = uiStrFmt("batchLine", { label: batchSourceLabel(it, j) }) + "\n";
+      if (pj2 && pj2.verdict != null) {
+        el._plainReportText = head + buildPlainTextReport(pj2, itemMetaFromBatch(it));
+      } else if (pr2) {
+        el._plainReportText = head + pr2;
+      }
+      wireCopyReport(el);
+    }
+    var btnAll = container.querySelector("#btn-copy-batch-all");
+    if (btnAll) {
+      btnAll.addEventListener("click", async function () {
+        var o = btnAll.textContent;
+        try {
+          await navigator.clipboard.writeText(plainJoined);
+          btnAll.textContent = uiStr("copyDone");
+          setTimeout(function () { btnAll.textContent = o; }, 1600);
+        } catch (e) {
+          btnAll.textContent = uiStr("copyFailed");
+          setTimeout(function () { btnAll.textContent = o; }, 2000);
+        }
+      });
+    }
+  }
+
+  function formatRunTime(ts) {
+    if (ts == null || ts === "") return "—";
+    try {
+      var loc = getReportLocale() === "en" ? "en-US" : "zh-CN";
+      return new Date(Number(ts) * 1000).toLocaleString(loc, { hour12: false });
+    } catch (e0) {
+      return String(ts);
+    }
+  }
+
+  function renderRunsTableHtml(runs) {
+    if (!runs || !runs.length) {
+      return '<p class="meta">' + uiStr("noRecords") + "</p>";
+    }
+    var h = '<table class="runs-table"><thead><tr>';
+    h +=
+      "<th>" +
+      escapeHtml(uiStr("runColTime")) +
+      "</th><th>" +
+      escapeHtml(uiStr("runColStatus")) +
+      "</th><th>" +
+      escapeHtml(uiStr("runColType")) +
+      "</th><th>" +
+      escapeHtml(uiStr("runColDuration")) +
+      "</th><th>" +
+      escapeHtml(uiStr("runColModel")) +
+      "</th><th>" +
+      escapeHtml(uiStr("runColSummary")) +
+      "</th>";
+    h += "</tr></thead><tbody>";
+    for (var i = 0; i < runs.length; i++) {
+      var row = runs[i];
+      var rid = row.run_id != null ? String(row.run_id) : "";
+      var dur = row.duration_ms != null ? String(Math.round(row.duration_ms)) + " ms" : "—";
+      var mod = [row.model_provider, row.model_name].filter(Boolean).join(" / ") || "—";
+      var sm = row.input_summary != null ? String(row.input_summary).trim() : "";
+      var smShort = sm.length > 72 ? sm.slice(0, 72) + "…" : sm;
+      h += '<tr class="run-row" data-run-id="' + escapeHtml(rid) + '">';
+      h += "<td>" + escapeHtml(formatRunTime(row.created_at)) + "</td>";
+      h += "<td>" + escapeHtml(row.status != null ? String(row.status) : "—") + "</td>";
+      h += "<td>" + escapeHtml(row.content_type != null ? String(row.content_type) : "—") + "</td>";
+      h += '<td class="mono-cell">' + escapeHtml(dur) + "</td>";
+      h +=
+        '<td class="mono-cell">' +
+        escapeHtml(mod.length > 36 ? mod.slice(0, 36) + "…" : mod) +
+        "</td>";
+      h += '<td title="' + escapeHtml(sm) + '">' + escapeHtml(smShort || "—") + "</td>";
+      h += "</tr>";
+    }
+    h += "</tbody></table>";
+    return h;
+  }
+
+  function formatRunDetailHtml(row) {
+    var lines = [];
+    lines.push(
+      '<p class="detail-kv"><strong>run_id</strong><span class="mono-cell">' +
+        escapeHtml(row.run_id || "") +
+        "</span></p>"
+    );
+    lines.push(
+      '<p class="detail-kv"><strong>' +
+        escapeHtml(uiStr("runKvTime")) +
+        "</strong>" +
+        escapeHtml(formatRunTime(row.created_at)) +
+        "</p>"
+    );
+    lines.push(
+      '<p class="detail-kv"><strong>' +
+        escapeHtml(uiStr("runKvStatus")) +
+        "</strong>" +
+        escapeHtml(row.status != null ? String(row.status) : "—") +
+        "</p>"
+    );
+    lines.push(
+      '<p class="detail-kv"><strong>' +
+        escapeHtml(uiStr("runKvContentType")) +
+        "</strong>" +
+        escapeHtml(row.content_type != null ? String(row.content_type) : "—") +
+        "</p>"
+    );
+    if (row.duration_ms != null) {
+      lines.push(
+        '<p class="detail-kv"><strong>' +
+          escapeHtml(uiStr("runKvDuration")) +
+          "</strong>" +
+          escapeHtml(String(Math.round(row.duration_ms))) +
+          " ms</p>"
+      );
+    }
+    if (row.iterations != null) {
+      lines.push(
+        '<p class="detail-kv"><strong>' +
+          escapeHtml(uiStr("runKvIterations")) +
+          "</strong>" +
+          escapeHtml(String(row.iterations)) +
+          "</p>"
+      );
+    }
+    if (row.model_provider || row.model_name) {
+      lines.push(
+        '<p class="detail-kv"><strong>' +
+          escapeHtml(uiStr("runKvModel")) +
+          "</strong>" +
+          escapeHtml([row.model_provider, row.model_name].filter(Boolean).join(" / ")) +
+          "</p>"
+      );
+    }
+    if (row.task_id) {
+      lines.push(
+        '<p class="detail-kv"><strong>task_id</strong>' + escapeHtml(String(row.task_id)) + "</p>"
+      );
+    }
+    var summ = row.input_summary != null ? String(row.input_summary) : "";
+    if (summ) {
+      lines.push(
+        '<p class="detail-kv"><strong>' + escapeHtml(uiStr("runKvInputSummary")) + "</strong></p>"
+      );
+      lines.push('<p class="summary-text">' + escapeHtml(summ) + "</p>");
+    }
+    if (row.error) {
+      lines.push(
+        '<p class="detail-kv"><strong>' + escapeHtml(uiStr("runKvError")) + "</strong></p>"
+      );
+      lines.push(
+        '<p class="result-prose err">' + escapeHtml(String(row.error)) + "</p>"
+      );
+    }
+    var apiRes = row.result;
+    if (apiRes && typeof apiRes === "object") {
+      var resp = apiRes.response != null ? String(apiRes.response) : "";
+      var pj = parseResponseJson(resp);
+      if (pj && pj.verdict != null) {
+        lines.push(
+          '<p class="hist-sub">' + escapeHtml(uiStr("histSub")) + "</p>"
+        );
+        lines.push(
+          renderStructuredReportHtml(pj, {
+            run_id: row.run_id,
+            duration_ms: row.duration_ms,
+            iterations: row.iterations
+          }, { skipToolbar: true })
+        );
+        var plain = buildPlainTextReport(pj, {
+          run_id: row.run_id,
+          duration_ms: row.duration_ms,
+          iterations: row.iterations
+        });
+        lines.push(
+          '<p style="margin-top:0.75rem"><button type="button" class="secondary sm" id="btn-copy-run-detail">' +
+            escapeHtml(uiStr("copyRunDetail")) +
+            "</button></p>"
+        );
+        setTimeout(function () {
+          var btn = document.getElementById("btn-copy-run-detail");
+          if (btn && plain) {
+            btn.addEventListener("click", async function () {
+              try {
+                await navigator.clipboard.writeText(plain);
+                var lab = btn.textContent;
+                btn.textContent = uiStr("copyDone");
+                setTimeout(function () {
+                  btn.textContent = lab;
+                }, 1500);
+              } catch (e1) {}
+            });
+          }
+        }, 0);
+      } else if (resp) {
+        lines.push(
+          '<p class="hist-sub">' + escapeHtml(uiStr("modelRaw")) + "</p>"
+        );
+        lines.push(
+          '<p class="summary-text">' +
+            escapeHtml(resp.length > 12000 ? resp.slice(0, 12000) + "…" : resp) +
+            "</p>"
+        );
+      }
+    }
+    return lines.join("");
+  }
+
+  async function showRunDetail(runId) {
+    var panel = document.getElementById("run-detail-panel");
+    if (!panel) return;
+    panel.classList.add("visible");
+    panel.innerHTML = '<p class="meta">' + escapeHtml(uiStr("loadingDetail")) + "</p>";
+    try {
+      var r = await fetch(apiUrl("/v1/runs/" + encodeURIComponent(runId)), {
+        cache: "no-store"
+      });
+      var row = await r.json().catch(function () {
+        return null;
+      });
+      if (!r.ok) {
+        panel.innerHTML =
+          '<p class="result-prose err">' + escapeHtml(detailMessage(row || {})) + "</p>";
+        return;
+      }
+      panel.innerHTML = formatRunDetailHtml(row);
+    } catch (e) {
+      panel.innerHTML =
+        '<p class="result-prose err">' + escapeHtml(String(e)) + "</p>";
+    }
+  }
+
+  async function refreshRuns() {
+    var el = document.getElementById("runs-body");
+    if (!el) return;
+    el.innerHTML =
+      '<p class="meta" id="i18n-runs-loading">' + escapeHtml(uiStr("runsLoading")) + "</p>";
+    var panel = document.getElementById("run-detail-panel");
+    if (panel) {
+      panel.classList.remove("visible");
+      panel.innerHTML = "";
+    }
+    try {
+      var r = await fetch(apiUrl("/v1/runs?limit=40&offset=0"), { cache: "no-store" });
+      var data = await r.json().catch(function () {
+        return null;
+      });
+      if (!r.ok) {
+        el.innerHTML =
+          '<p class="result-prose err">' + escapeHtml(detailMessage(data || {})) + "</p>";
+        return;
+      }
+      var runs = data && data.runs ? data.runs : [];
+      el.innerHTML = renderRunsTableHtml(runs);
+      el.querySelectorAll(".run-row").forEach(function (tr) {
+        tr.addEventListener("click", function () {
+          var rid = tr.getAttribute("data-run-id");
+          if (!rid) return;
+          el.querySelectorAll(".run-row").forEach(function (x) {
+            x.classList.remove("active");
+          });
+          tr.classList.add("active");
+          showRunDetail(rid);
+        });
+      });
+    } catch (e2) {
+      el.innerHTML = '<p class="result-prose err">' + escapeHtml(String(e2)) + "</p>";
+    }
+  }
+
+  document.getElementById("btn-refresh-runs").addEventListener("click", function () {
+    refreshRuns();
+  });
+
+  document.getElementById("btn-text").addEventListener("click", async function () {
+    const btn = this;
+    const out = document.getElementById("out-text");
+    const body = document.getElementById("text-body").value;
+    btn.disabled = true;
+    out.style.display = "block";
+    out.innerHTML = '<p class="meta">' + escapeHtml(uiStr("processing")) + "</p>";
+    try {
+      const r = await fetch(apiUrl("/v1/review"), {
+        method: "POST",
+        headers: headers(),
+        body: JSON.stringify({ content: body, content_type: "auto" }),
+      });
+      const data = await r.json().catch(function () { return null; });
+      if (!r.ok) {
+        out.innerHTML = '<p class="result-prose err">' + escapeHtml(detailMessage(data || {})) + "</p>";
+        return;
+      }
+      renderReviewResult(out, data);
+      refreshRuns();
+    } catch (e) {
+      out.innerHTML = '<p class="result-prose err">' + escapeHtml(String(e)) + "</p>";
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  const fileInput = document.getElementById("file-input");
+  const btnFile = document.getElementById("btn-file");
+  const btnFilePick = document.getElementById("btn-file-pick");
+  if (btnFilePick && fileInput) {
+    btnFilePick.addEventListener("click", function () {
+      fileInput.click();
+    });
+  }
+  updateFilePickHint();
+  fileInput.addEventListener("change", function () {
+    updateFilePickHint();
+    btnFile.disabled = !fileInput.files || fileInput.files.length === 0;
+  });
+
+  document.getElementById("btn-file").addEventListener("click", async function () {
+    const btn = this;
+    const out = document.getElementById("out-file");
+    const files = fileInput.files;
+    if (!files || !files.length) return;
+    btn.disabled = true;
+    out.style.display = "block";
+    out.innerHTML = '<p class="meta">' + escapeHtml(uiStr("uploading")) + "</p>";
+    try {
+      const fd = new FormData();
+      for (let i = 0; i < files.length; i++) fd.append("files", files[i]);
+      const sid = (document.getElementById("session-id").value || "").trim();
+      const h = {};
+      if (sid) h["X-Review-Session"] = sid;
+      const r = await fetch(apiUrl("/v1/review/file"), { method: "POST", headers: h, body: fd });
+      const data = await r.json().catch(function () { return null; });
+      if (!r.ok) {
+        out.innerHTML = '<p class="result-prose err">' + escapeHtml(detailMessage(data || {})) + "</p>";
+        return;
+      }
+      if (data.batch) {
+        renderBatchUser(out, data);
+      } else {
+        renderReviewResult(out, data);
+      }
+      refreshRuns();
+    } catch (e) {
+      out.innerHTML = '<p class="result-prose err">' + escapeHtml(String(e)) + "</p>";
+    } finally {
+      btn.disabled = !fileInput.files || fileInput.files.length === 0;
+    }
+  });
+
+  function onLlmModalEscape(e) {
+    if (e.key === "Escape") closeLlmSettingsModal();
+  }
+
+  function closeLlmSettingsModal() {
+    var modal = document.getElementById("llm-settings-modal");
+    if (!modal) return;
+    modal.classList.remove("is-visible");
+    modal.setAttribute("aria-hidden", "true");
+    document.removeEventListener("keydown", onLlmModalEscape);
+  }
+
+  async function loadLlmConfigIntoForm() {
+    var statusEl = document.getElementById("llm-settings-status");
+    var keyInput = document.getElementById("cfg-api-key");
+    if (statusEl) statusEl.textContent = uiStr("loadingCfg");
+    _llmCfgInitial = null;
+    try {
+      var r = await fetch(apiUrl("/v1/config/llm"), { cache: "no-store" });
+      var data = await r.json().catch(function () {
+        return null;
+      });
+      if (!r.ok) {
+        if (statusEl) statusEl.textContent = uiStr("loadFail") + detailMessage(data || {});
+        return;
+      }
+      _llmCfgInitial = {
+        provider: data.provider != null ? String(data.provider) : "",
+        model: data.model != null ? String(data.model) : "",
+        api_base: data.api_base != null ? String(data.api_base) : "",
+        temperature: Number(data.temperature),
+        max_tokens: Number(data.max_tokens),
+        timeout: Number(data.timeout),
+        minimax_group_id: data.minimax_group_id != null ? String(data.minimax_group_id) : "",
+        api_key_configured: !!data.api_key_configured
+      };
+      document.getElementById("cfg-provider").value = _llmCfgInitial.provider;
+      document.getElementById("cfg-model").value = _llmCfgInitial.model;
+      document.getElementById("cfg-api-base").value = _llmCfgInitial.api_base;
+      document.getElementById("cfg-temperature").value = String(_llmCfgInitial.temperature);
+      document.getElementById("cfg-max-tokens").value = String(_llmCfgInitial.max_tokens);
+      document.getElementById("cfg-timeout").value = String(_llmCfgInitial.timeout);
+      document.getElementById("cfg-minimax").value = _llmCfgInitial.minimax_group_id;
+      keyInput.value = "";
+      keyInput.placeholder = _llmCfgInitial.api_key_configured
+        ? uiStr("llmKeyPhConfigured")
+        : uiStr("llmKeyPhOptional");
+      if (statusEl) statusEl.textContent = "";
+    } catch (e) {
+      if (statusEl) statusEl.textContent = uiStr("loadFail") + String(e);
+    }
+  }
+
+  function openLlmSettingsModal() {
+    var modal = document.getElementById("llm-settings-modal");
+    if (!modal) return;
+    var statusEl = document.getElementById("llm-settings-status");
+    if (statusEl) statusEl.textContent = "";
+    modal.classList.add("is-visible");
+    modal.setAttribute("aria-hidden", "false");
+    document.addEventListener("keydown", onLlmModalEscape);
+    loadLlmConfigIntoForm();
+  }
+
+  function buildLlmPatchFromForm() {
+    if (!_llmCfgInitial) throw new Error(uiStr("cfgNotLoaded"));
+    var patch = {};
+    var p = document.getElementById("cfg-provider").value.trim();
+    if (p !== _llmCfgInitial.provider) patch.provider = p;
+    var m = document.getElementById("cfg-model").value.trim();
+    if (m !== _llmCfgInitial.model) patch.model = m;
+    var ab = document.getElementById("cfg-api-base").value.trim();
+    if (ab !== _llmCfgInitial.api_base) patch.api_base = ab;
+    var t = parseFloat(document.getElementById("cfg-temperature").value);
+    if (isNaN(t)) throw new Error(uiStr("llmErrTemperature"));
+    if (t !== Number(_llmCfgInitial.temperature)) patch.temperature = t;
+    var mt = parseInt(document.getElementById("cfg-max-tokens").value, 10);
+    if (isNaN(mt)) throw new Error(uiStr("llmErrMaxTokens"));
+    if (mt !== Number(_llmCfgInitial.max_tokens)) patch.max_tokens = mt;
+    var to = parseInt(document.getElementById("cfg-timeout").value, 10);
+    if (isNaN(to)) throw new Error(uiStr("llmErrTimeout"));
+    if (to !== Number(_llmCfgInitial.timeout)) patch.timeout = to;
+    var mm = document.getElementById("cfg-minimax").value.trim();
+    if (mm !== _llmCfgInitial.minimax_group_id) patch.minimax_group_id = mm;
+    var k = document.getElementById("cfg-api-key").value.trim();
+    if (k) patch.api_key = k;
+    return patch;
+  }
+
+  document.getElementById("btn-llm-settings").addEventListener("click", openLlmSettingsModal);
+  document.getElementById("llm-settings-close").addEventListener("click", closeLlmSettingsModal);
+  document.getElementById("llm-settings-cancel").addEventListener("click", closeLlmSettingsModal);
+  document.getElementById("llm-settings-backdrop").addEventListener("click", closeLlmSettingsModal);
+  document.getElementById("llm-settings-form").addEventListener("submit", async function (e) {
+    e.preventDefault();
+    var statusEl = document.getElementById("llm-settings-status");
+    var saveBtn = document.getElementById("llm-settings-save");
+    if (statusEl) statusEl.textContent = "";
+    var patch;
+    try {
+      patch = buildLlmPatchFromForm();
+    } catch (err) {
+      if (statusEl) statusEl.textContent = String(err.message || err);
+      return;
+    }
+    if (!patch || Object.keys(patch).length === 0) {
+      if (statusEl) statusEl.textContent = uiStr("noChanges");
+      return;
+    }
+    saveBtn.disabled = true;
+    try {
+      var r = await fetch(apiUrl("/v1/config/llm"), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch)
+      });
+      var data = await r.json().catch(function () {
+        return null;
+      });
+      if (!r.ok) {
+        if (statusEl) statusEl.textContent = detailMessage(data || {});
+        return;
+      }
+      if (statusEl) statusEl.textContent = uiStr("saveDone");
+      _llmCfgInitial = {
+        provider: String(data.provider || ""),
+        model: String(data.model || ""),
+        api_base: String(data.api_base || ""),
+        temperature: Number(data.temperature),
+        max_tokens: Number(data.max_tokens),
+        timeout: Number(data.timeout),
+        minimax_group_id: String(data.minimax_group_id || ""),
+        api_key_configured: !!data.api_key_configured
+      };
+      var keyInput = document.getElementById("cfg-api-key");
+      keyInput.value = "";
+      keyInput.placeholder = _llmCfgInitial.api_key_configured
+        ? uiStr("llmKeyPhConfigured")
+        : uiStr("llmKeyPhOptional");
+      document.getElementById("cfg-provider").value = _llmCfgInitial.provider;
+      document.getElementById("cfg-model").value = _llmCfgInitial.model;
+      document.getElementById("cfg-api-base").value = _llmCfgInitial.api_base;
+      document.getElementById("cfg-temperature").value = String(_llmCfgInitial.temperature);
+      document.getElementById("cfg-max-tokens").value = String(_llmCfgInitial.max_tokens);
+      document.getElementById("cfg-timeout").value = String(_llmCfgInitial.timeout);
+      document.getElementById("cfg-minimax").value = _llmCfgInitial.minimax_group_id;
+      setTimeout(closeLlmSettingsModal, 900);
+    } catch (err2) {
+      if (statusEl) statusEl.textContent = String(err2);
+    } finally {
+      saveBtn.disabled = false;
+    }
+  });
+
+  var _displayCfgInitial = null;
+
+  function onDisplayModalEscape(e) {
+    if (e.key === "Escape") closeDisplaySettingsModal();
+  }
+
+  function closeDisplaySettingsModal() {
+    var modal = document.getElementById("display-settings-modal");
+    if (!modal) return;
+    modal.classList.remove("is-visible");
+    modal.setAttribute("aria-hidden", "true");
+    document.removeEventListener("keydown", onDisplayModalEscape);
+  }
+
+  async function loadDisplayConfigIntoForm() {
+    var statusEl = document.getElementById("display-settings-status");
+    var locSel = document.getElementById("cfg-display-locale");
+    if (statusEl) statusEl.textContent = uiStr("loadingCfg");
+    _displayCfgInitial = null;
+    try {
+      var r = await fetch(apiUrl("/v1/config/display"), { cache: "no-store" });
+      var data = await r.json().catch(function () { return null; });
+      if (!r.ok) {
+        if (statusEl) statusEl.textContent = uiStr("loadFail") + detailMessage(data || {});
+        return;
+      }
+      var loc = data && (data.report_locale === "zh" || data.report_locale === "en") ? data.report_locale : "zh";
+      _displayCfgInitial = { report_locale: loc };
+      if (locSel) locSel.value = loc;
+      REPORT_LOCALE = loc;
+      if (statusEl) statusEl.textContent = "";
+      applyPageUiLocale();
+    } catch (e) {
+      if (statusEl) statusEl.textContent = uiStr("loadFail") + String(e);
+    }
+  }
+
+  function openDisplaySettingsModal() {
+    var modal = document.getElementById("display-settings-modal");
+    if (!modal) return;
+    var statusEl = document.getElementById("display-settings-status");
+    if (statusEl) statusEl.textContent = "";
+    modal.classList.add("is-visible");
+    modal.setAttribute("aria-hidden", "false");
+    document.addEventListener("keydown", onDisplayModalEscape);
+    loadDisplayConfigIntoForm();
+  }
+
+  var btnDisp = document.getElementById("btn-display-settings");
+  if (btnDisp) btnDisp.addEventListener("click", openDisplaySettingsModal);
+  var dsClose = document.getElementById("display-settings-close");
+  if (dsClose) dsClose.addEventListener("click", closeDisplaySettingsModal);
+  var dsCancel = document.getElementById("display-settings-cancel");
+  if (dsCancel) dsCancel.addEventListener("click", closeDisplaySettingsModal);
+  var dsBackdrop = document.getElementById("display-settings-backdrop");
+  if (dsBackdrop) dsBackdrop.addEventListener("click", closeDisplaySettingsModal);
+  var dsForm = document.getElementById("display-settings-form");
+  if (dsForm) {
+    dsForm.addEventListener("submit", async function (e) {
+      e.preventDefault();
+      var statusEl = document.getElementById("display-settings-status");
+      var saveBtn = document.getElementById("display-settings-save");
+      var locSel = document.getElementById("cfg-display-locale");
+      if (statusEl) statusEl.textContent = "";
+      if (!_displayCfgInitial || !locSel) {
+        if (statusEl) statusEl.textContent = uiStr("waitCfgLoad");
+        return;
+      }
+      var v = locSel.value;
+      if (v !== "zh" && v !== "en") return;
+      if (v === _displayCfgInitial.report_locale) {
+        if (statusEl) statusEl.textContent = uiStr("noChangesShort");
+        return;
+      }
+      saveBtn.disabled = true;
+      try {
+        var r = await fetch(apiUrl("/v1/config/display"), {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ report_locale: v })
+        });
+        var data = await r.json().catch(function () { return null; });
+        if (!r.ok) {
+          if (statusEl) statusEl.textContent = detailMessage(data || {});
+          return;
+        }
+        var nl = data && (data.report_locale === "zh" || data.report_locale === "en") ? data.report_locale : v;
+        _displayCfgInitial = { report_locale: nl };
+        REPORT_LOCALE = nl;
+        applyPageUiLocale();
+        if (statusEl) statusEl.textContent = uiStr("saveDone");
+        setTimeout(closeDisplaySettingsModal, 700);
+      } catch (err2) {
+        if (statusEl) statusEl.textContent = String(err2);
+      } finally {
+        saveBtn.disabled = false;
+      }
+    });
+  }
+
+  applyPageUiLocale();
+  pingHealth();
+  setInterval(pingHealth, 30000);
+  refreshRuns();
+})();
+  </script>
+</body>
+</html>

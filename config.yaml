@@ -1,0 +1,75 @@
+# In-repo example: set llm.provider / model as needed. api_key: use ${LLM_API_KEY} or leave empty to auto-pick
+# vendor env (OPENAI_API_KEY, ZHIPUAI_API_KEY, …) per provider—never commit plaintext keys.
+llm:
+  provider: openai
+  model: gpt-4o-mini
+  api_key: ${LLM_API_KEY}
+  api_base: ''
+  temperature: 0.3
+  max_tokens: 8192
+  timeout: 60
+  minimax_group_id: ''
+memory:
+  short_term_max_messages: 10
+  long_term_enabled: false
+  vector_store_type: chroma
+  persist_directory: data/memory
+rag:
+  enabled: false
+  persist_directory: data/knowledge_chroma
+  collection_name: review_knowledge
+  retrieve_k: 5
+  chunk_size: 800
+  chunk_overlap: 120
+  embedding_provider: ''
+  embedding_model: ''
+  knowledge_dirs:
+  - config/knowledge
+  auto_ingest_on_startup: false
+  max_ingest_file_kb: 2048
+pipeline:
+  wordlist:
+    preprocess_nfkc: true
+    preprocess_lowercase: true
+    strip_zero_width: true
+    wordlist_paths:
+    - config/wordlists/default.txt
+    early_exit_on_match: true
+    inject_recall_hint: true
+    expand_cjk_pinyin: true
+    scan_image_ocr_for_wordlist: true
+    image_llm_review_ocr_text: true
+    image_llm_review_pixels: true
+  fingerprint:
+    image_phash_enabled: false
+    image_phash_db_path: ''
+    image_phash_max_hamming: 0
+    image_phash_log_on_miss: false
+    image_collect_light_signals: true
+    image_dual_merge_policy: max_severity
+  image_dual_check:
+    image_dual_consistency_enabled: true
+    image_dual_disagreement_action: elevate_warn
+    report_locale: zh
+agent:
+  name: review
+  max_iterations: 10
+  max_loops: 5
+  verbose: true
+  attach_local_image_to_vision_llm: true
+queue:
+  enabled: true
+  max_concurrent: 4
+  persist_path: data/queue.db
+  poll_interval_ms: 200
+storage:
+  review_db_path: data/review.db
+observability:
+  log_json: false
+  metrics_enabled: true
+  log_file_path: data/logs/review.log
+limits:
+  max_text_kb: 256
+  max_file_kb: 51200
+  max_user_message_kb: 512
+offline_mode: false

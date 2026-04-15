@@ -1,0 +1,33 @@
+# Local secrets and env files (do not commit)
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+venv/
+.venv/
+
+# Local runtime data and logs (may contain sensitive paths or business content)
+data/
+*.db
+
+# Tools and IDEs
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Tests and coverage
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/

@@ -1,0 +1,46 @@
+Content review agent · offline source bundle
+============================================
+
+1. Extract
+
+  Unzip the archive to any directory (avoid non-ASCII characters and spaces in the path to reduce environment issues).
+
+2. One-step install
+
+  macOS / Linux:
+
+    cd into the extracted folder (contains pyproject.toml, install.sh, INSTALL.txt)
+    chmod +x install.sh
+    ./install.sh
+
+  Optional image / video extras (as needed; TUI is included in the default install):
+
+    ./install.sh --extras image,video
+
+  Windows:
+
+    · Recommended: install Git for Windows, open “Git Bash”, cd to the extracted folder, then run ./install.sh as on macOS/Linux.
+    · Or use WSL and run ./install.sh inside the Linux environment.
+    · Or manually:  python -m venv .venv  then  .venv\Scripts\activate  then  pip install -U pip setuptools wheel  and  pip install .  or  pip install ".[image,video]"
+
+3. Configure and run
+
+  1. If there is no .env in the folder, copy .env.example to .env and fill in values for your chosen model / service.
+  2. Activate the virtual environment:
+       macOS/Linux:  source .venv/bin/activate
+       Windows:      .\.venv\Scripts\activate
+  3. Start the Web UI and API (default port is in project docs, usually 18080):
+
+       content-review server
+
+     or:
+
+       python cli.py server
+
+  4. Open the site root in a browser to reach the review page (it redirects to /ui/).
+
+4. Notes
+
+  · Install requires network access to download PyPI packages; for fully offline setups, provide a local wheel index or an internal mirror.
+  · Image / video review pulls large dependencies; install only what you need via --extras.
+  · Technical notes and API docs: after the server starts, open /docs.

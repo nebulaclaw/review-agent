@@ -1,0 +1,34 @@
+# 默认敏感词表示例（生产请替换为合规审批后的词表）
+# 每行一条，# 开头为注释；词条会按 pipeline 配置做 NFKC/小写/去零宽后再匹配
+# 用 # @category <type> 标注分类，后续词条继承该分类，默认 illegal
+# 可用分类：porn / violence / hate / illegal / harass / misinfo / privacy / spam / dangerous / self_harm
+
+# @category illegal
+赌博
+洗钱
+
+# @category porn
+恋童
+色情直播
+裸聊
+约炮
+
+# @category dangerous
+枪支
+毒品
+
+# @category violence
+暴恐袭击
+血腥屠杀
+
+# @category hate
+种族灭绝
+纳粹
+
+# @category self_harm
+自杀教程
+割腕方法
+
+# @category spam
+免费领取
+加微信
