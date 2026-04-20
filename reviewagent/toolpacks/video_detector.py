@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -20,10 +21,22 @@ class VideoDetector:
         frame_interval: int = 1,
         max_frames: int = 30,
         frame_concurrency: int = 4,
+        max_vision_frames: int = 12,
+        scene_threshold: float = 0.35,
+        max_ocr_frames: int = 10,
     ) -> None:
         self.frame_interval = max(1, int(frame_interval))
         self.max_frames = max(1, int(max_frames))
         self.frame_concurrency = max(1, int(frame_concurrency))
+        # Vision LLM frame budget and scene-detection sensitivity.
+        # Raise max_vision_frames for longer/riskier content; lower
+        # scene_threshold to catch subtler transitions (0.1–0.5 range).
+        self.max_vision_frames = max(1, int(max_vision_frames))
+        self.scene_threshold = max(0.05, min(1.0, float(scene_threshold)))
+        # OCR is CPU-intensive; adjacent frames contain nearly identical text.
+        # This cap sub-samples the dense frame pool before running EasyOCR so
+        # that OCR cost scales with content complexity, not raw frame count.
+        self.max_ocr_frames = max(1, int(max_ocr_frames))
 
     async def detect(self, video_path: str) -> dict:
         path = Path(video_path)
@@ -37,11 +50,27 @@ class VideoDetector:
             audio_ref = await asyncio.to_thread(self._extract_audio_track, str(path), temp_dir)
             subtitles = await asyncio.to_thread(self._extract_subtitles, str(path), temp_dir)
 
+            # Run scene-change extraction *in parallel* with modality analysis.
+            # Both produce files inside temp_dir, which stays alive until all
+            # tasks complete and base64 encoding finishes below.
+            scene_dir = str(Path(temp_dir) / "scenes")
+            scene_task = asyncio.create_task(
+                asyncio.to_thread(
+                    self._extract_scene_frames, str(path), scene_dir, self.scene_threshold
+                )
+            )
             visual_task = asyncio.create_task(self._run_visual_review(frame_refs))
             text_task = asyncio.create_task(self._run_text_review(subtitles))
             audio_task = asyncio.create_task(self._run_audio_review(audio_ref))
-            visual_out, text_out, audio_out = await asyncio.gather(
-                visual_task, text_task, audio_task
+
+            scene_refs, visual_out, text_out, audio_out = await asyncio.gather(
+                scene_task, visual_task, text_task, audio_task
+            )
+
+            # Encode representative frames as base64 **before** the temp dir is
+            # deleted so the vision sub-agent can analyse the actual visuals.
+            frame_samples_b64 = await asyncio.to_thread(
+                self._sample_frames_b64, frame_refs, scene_refs, self.max_vision_frames
             )
 
         raw_violations = (
@@ -78,6 +107,7 @@ class VideoDetector:
             "verdict": verdict,
             "confidence": 0.7 if not degraded else 0.4,
             "violations": all_violations,
+            "frame_samples_b64": frame_samples_b64,
             "details": {
                 "frames_analyzed": len(frame_refs),
                 "text_detected": text_out.get("detected_text", ""),
@@ -241,6 +271,103 @@ class VideoDetector:
             "has_subtitle_stream": has_subtitle,
         }
 
+    def _extract_scene_frames(
+        self,
+        video_path: str,
+        scene_dir: str,
+        threshold: float = 0.35,
+    ) -> list[str]:
+        """Extract frames at scene-change boundaries using ffmpeg's built-in detector.
+
+        The ``select=gt(scene,T)`` filter scores each frame by its pixel-level
+        difference from the previous one (0 = identical, 1 = completely different).
+        A threshold around 0.3–0.4 captures hard cuts and major transitions while
+        ignoring minor camera movement.
+
+        Frames are scaled to 640 px wide to keep base64 payloads manageable.
+        """
+        if shutil.which("ffmpeg") is None:
+            return []
+        os.makedirs(scene_dir, exist_ok=True)
+        pattern = str(Path(scene_dir) / "scene_%04d.jpg")
+        # \, escapes the comma inside the filter expression so ffmpeg does not
+        # interpret it as a filter-chain separator.
+        vf = f"select=gt(scene\\,{threshold}),scale=640:-2"
+        cmd = [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            video_path,
+            "-vf",
+            vf,
+            "-vsync",
+            "vfr",
+            pattern,
+        ]
+        out = self._run_cmd(cmd)
+        if not out["ok"]:
+            return []
+        return [str(p) for p in sorted(Path(scene_dir).glob("scene_*.jpg"))]
+
+    def _sample_frames_b64(
+        self,
+        frame_paths: list[str],
+        scene_frame_paths: list[str] | None = None,
+        max_samples: int = 12,
+    ) -> list[str]:
+        """Build a representative frame sample for the vision sub-agent.
+
+        Sampling strategy (combines two complementary sources):
+
+        1. **Scene-change keyframes** (from ``_extract_scene_frames``):
+           capture semantic boundaries — hard cuts, scene transitions, abrupt
+           content changes.  These are the highest-risk frames and take priority.
+           If there are more than *max_samples* scene frames they are sub-sampled
+           evenly so no transition is over-represented.
+
+        2. **Uniform temporal frames** (from ``_extract_keyframes``):
+           fill the remaining budget with evenly-spaced frames to ensure no
+           section of the video goes unchecked (in-scene content, gradual fades).
+
+        The union is deduplicated by filename (scene and uniform frames live in
+        different directories so collisions are impossible) and capped at
+        *max_samples*.
+        """
+        scene_paths = list(scene_frame_paths or [])
+        uniform_paths = list(frame_paths or [])
+
+        # --- Scene frames: take up to max_samples, evenly spread if needed ---
+        if len(scene_paths) > max_samples:
+            step = max(1, len(scene_paths) // max_samples)
+            scene_paths = scene_paths[::step][:max_samples]
+
+        # --- Uniform frames: fill remaining budget ---
+        remaining = max_samples - len(scene_paths)
+        fill: list[str] = []
+        if uniform_paths and remaining > 0:
+            step = max(1, len(uniform_paths) // remaining)
+            fill = uniform_paths[::step][:remaining]
+
+        all_paths = scene_paths + fill
+
+        # --- Encode to base64 data URLs ---
+        result: list[str] = []
+        for fp in all_paths:
+            try:
+                with open(fp, "rb") as fh:
+                    data = base64.b64encode(fh.read()).decode("ascii")
+                # Scene frames are already scaled to 640 px; uniform frames
+                # keep their original resolution (acceptable for most videos;
+                # production deployments with 4K sources should add a resize step).
+                mime = "image/jpeg"
+                result.append(f"data:{mime};base64,{data}")
+            except OSError:
+                pass
+        return result
+
     def _extract_keyframes(self, video_path: str, temp_dir: str) -> list[str]:
         if shutil.which("ffmpeg") is None:
             return []
@@ -310,9 +437,28 @@ class VideoDetector:
             return []
         return self._parse_srt(out_srt)
 
+    def _sample_ocr_frames(self, frame_paths: list[str]) -> list[str]:
+        """Sub-sample *frame_paths* for OCR to avoid redundant work.
+
+        Adjacent frames from a continuous shot share nearly identical text
+        content.  Capping at ``max_ocr_frames`` evenly-spaced frames gives the
+        same violation-detection quality at a fraction of the EasyOCR cost.
+
+        Examples with default max_ocr_frames=10:
+        - 26 s @ 1 fps → 26 frames extracted, 10 sent to OCR  (~2.6 s interval)
+        - 60 s @ 1 fps → 30 frames extracted, 10 sent to OCR  (~3 s interval)
+        - 10 s @ 1 fps → 10 frames extracted, all 10 sent to OCR (under cap)
+        """
+        if len(frame_paths) <= self.max_ocr_frames:
+            return frame_paths
+        step = max(1, len(frame_paths) // self.max_ocr_frames)
+        return frame_paths[::step][: self.max_ocr_frames]
+
     async def _run_visual_review(self, frame_paths: list[str]) -> dict[str, Any]:
         if not frame_paths:
             return {"status": "skipped", "reason": "no_frames", "violations": [], "timeline": []}
+        # Sub-sample before OCR: adjacent frames share nearly identical text.
+        ocr_frames = self._sample_ocr_frames(frame_paths)
         sem = asyncio.Semaphore(self.frame_concurrency)
         detector = self._new_image_detector()
 
@@ -321,11 +467,20 @@ class VideoDetector:
                 result = await detector.detect(fp)
             return {"index": idx, "frame_path": fp, "result": result}
 
-        rows = await asyncio.gather(*[_one(i, fp) for i, fp in enumerate(frame_paths)])
+        rows = await asyncio.gather(*[_one(i, fp) for i, fp in enumerate(ocr_frames)])
         violations: list[dict[str, Any]] = []
         timeline: list[dict[str, Any]] = []
+        # Collect ALL OCR text, not just wordlist hits — LLM sub-agent needs the
+        # full text for semantic review even when the wordlist finds nothing.
+        all_ocr_snippets: list[str] = []
+        seen_snippets: set[str] = set()
         for row in rows:
             r = row["result"] or {}
+            # detected_text lives inside the "details" sub-dict of ImageDetector results
+            frame_text = (r.get("details", {}).get("detected_text") or "").strip()
+            if frame_text and frame_text not in seen_snippets:
+                seen_snippets.add(frame_text)
+                all_ocr_snippets.append(frame_text)
             vs = r.get("violations", []) or []
             if vs:
                 timeline.append(
@@ -343,7 +498,8 @@ class VideoDetector:
         timeline = self._compress_visual_timeline(timeline)
         return {
             "status": "success",
-            "frames_analyzed": len(frame_paths),
+            "frames_analyzed": len(ocr_frames),
+            "detected_text": "\n---\n".join(all_ocr_snippets),
             "violations": violations,
             "timeline": timeline,
         }

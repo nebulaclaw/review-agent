@@ -181,11 +181,56 @@ class StorageConfig(BaseModel):
     review_db_path: str = "data/review.db"
 
 
+class TracingLangSmithConfig(BaseModel):
+    """LangSmith connection settings (nested under ``observability.tracing``)."""
+
+    api_key: str = ""
+    project: str = "reviewagent"
+    endpoint: str = ""
+
+
+class TracingLangFuseConfig(BaseModel):
+    """LangFuse connection settings (nested under ``observability.tracing``).
+
+    ``host`` defaults to cloud (https://cloud.langfuse.com); set to
+    ``http://localhost:3000`` for a self-hosted Docker deployment.
+    """
+
+    public_key: str = ""
+    secret_key: str = ""
+    host: str = ""
+
+
+class TracingConfig(BaseModel):
+    """Unified tracing configuration.  Pick **one** backend via ``backend``.
+
+    Supported values for ``backend``:
+    - ``none``       — tracing disabled (default)
+    - ``langsmith``  — LangSmith cloud / on-prem (requires ``langsmith.api_key``)
+    - ``langfuse``   — LangFuse cloud or self-hosted (requires ``langfuse.public_key``
+                       and ``langfuse.secret_key``)
+
+    Common flags (apply regardless of backend):
+    - ``hide_inputs``  — omit request content from trace records
+    - ``hide_outputs`` — omit LLM responses from trace records
+    - ``tags``         — extra string tags attached to every span
+    """
+
+    enabled: bool = False
+    backend: Literal["none", "langsmith", "langfuse"] = "none"
+    hide_inputs: bool = False
+    hide_outputs: bool = False
+    tags: list[str] = Field(default_factory=list)
+    langsmith: TracingLangSmithConfig = Field(default_factory=TracingLangSmithConfig)
+    langfuse: TracingLangFuseConfig = Field(default_factory=TracingLangFuseConfig)
+
+
 class ObservabilityConfig(BaseModel):
     log_json: bool = False
     metrics_enabled: bool = True
     # Relative to repo root or absolute; empty = console only (no log file)
     log_file_path: str = ""
+    tracing: TracingConfig = Field(default_factory=TracingConfig)
 
 
 class LimitsConfig(BaseModel):
@@ -284,6 +329,22 @@ class Settings(BaseModel):
             for ok, val in list(obs.items()):
                 if isinstance(val, str) and val.startswith("${") and val.endswith("}"):
                     obs[ok] = os.environ.get(val[2:-1], "")
+            # Expand nested tracing.* and tracing.langsmith.* / tracing.langfuse.* fields
+            tr = obs.get("tracing")
+            if isinstance(tr, dict):
+                tr = dict(tr)
+                for tk, val in list(tr.items()):
+                    if isinstance(val, str) and val.startswith("${") and val.endswith("}"):
+                        tr[tk] = os.environ.get(val[2:-1], "")
+                for sub_key in ("langsmith", "langfuse"):
+                    sub = tr.get(sub_key)
+                    if isinstance(sub, dict):
+                        sub = dict(sub)
+                        for sk, val in list(sub.items()):
+                            if isinstance(val, str) and val.startswith("${") and val.endswith("}"):
+                                sub[sk] = os.environ.get(val[2:-1], "")
+                        tr[sub_key] = sub
+                obs["tracing"] = tr
             data["observability"] = obs
 
         sto = data.get("storage")

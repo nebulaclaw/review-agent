@@ -41,6 +41,12 @@ dev = [
     "ImageHash>=4.3.1",
 ]
 
+# Observability: LangSmith (cloud) or LangFuse (self-hostable open-source)
+observability = [
+    "langsmith>=0.4",
+    "langfuse>=3.0",
+]
+
 # Image pipeline (OCR via EasyOCR, pulls torch; first run downloads recognition models)
 image = [
     "pillow>=10.0",

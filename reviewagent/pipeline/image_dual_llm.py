@@ -69,7 +69,7 @@ async def run_image_dual_llm(
     Never uses bind_tools.
     If both LLM paths are disabled in config, returns None (caller falls back to single run()).
     """
-    from reviewagent.agent import _image_readable_for_vision, _vision_attachment_eligible
+    from reviewagent.reviewers.utils import image_readable_for_vision, vision_attachment_eligible
 
     settings: Settings = orchestrator._settings
     fc = settings.pipeline.wordlist
@@ -89,8 +89,8 @@ async def run_image_dual_llm(
     do_ocr = bool(fc.image_llm_review_ocr_text and ocr_text)
     do_vis = bool(
         fc.image_llm_review_pixels
-        and _vision_attachment_eligible(settings, image_path)
-        and _image_readable_for_vision(image_path)
+        and vision_attachment_eligible(settings, image_path)
+        and image_readable_for_vision(image_path)
     )
     logger.info(
         "%s dual_llm_start do_ocr=%s do_vis=%s ocr_chars=%s prefix_chars=%s",

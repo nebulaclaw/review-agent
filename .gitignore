@@ -31,3 +31,4 @@ data/
 .ruff_cache/
 .coverage
 htmlcov/
+tests/resource

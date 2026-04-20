@@ -219,6 +219,15 @@
     .summary-text {
       margin: 0; white-space: pre-wrap; font-size: 0.9rem; line-height: 1.55; color: var(--text);
     }
+    .risk-badge { display: inline-block; padding: 0.15rem 0.65rem; border-radius: 999px; font-size: 0.78rem; font-weight: 600; letter-spacing: 0.02em; }
+    .risk-none   { background: rgba(46,125,50,0.15);  color: #4caf50; }
+    .risk-low    { background: rgba(21,101,192,0.15); color: #64b5f6; }
+    .risk-medium { background: rgba(230,81,0,0.15);  color: #ffb74d; }
+    .risk-high   { background: rgba(183,28,28,0.18); color: #ef5350; }
+    .modality-list { margin: 0.35rem 0 0; padding: 0; list-style: none; }
+    .modality-list li { display: flex; gap: 0.6rem; align-items: flex-start; padding: 0.4rem 0; border-bottom: 1px solid var(--border); font-size: 0.88rem; line-height: 1.5; }
+    .modality-list li:last-child { border-bottom: none; }
+    .modality-list li strong { flex-shrink: 0; min-width: 120px; color: var(--muted); font-size: 0.78rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; padding-top: 0.1rem; }
     .batch-report-card {
       background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
       padding: 0.85rem 1rem; margin-top: 0.65rem;
@@ -867,6 +876,13 @@
     return getReportLocale() === "en" ? POSITION_LABELS_EN : POSITION_LABELS_ZH;
   }
 
+  function riskLevelLabel(level) {
+    if (getReportLocale() === "en") {
+      return { none: "None", low: "Low", medium: "Medium", high: "High" }[level] || level;
+    }
+    return { none: "无", low: "低", medium: "中", high: "高" }[level] || level;
+  }
+
   function reportChrome() {
     if (getReportLocale() === "en") {
       return {
@@ -883,7 +899,11 @@
         auditRunId: "Audit run_id",
         durationMs: "Duration",
         toolIterations: "Tool rounds",
-        metaRoundPrefix: "Round "
+        metaRoundPrefix: "Round ",
+        riskLevel: "Risk level",
+        reasoning: "Reasoning",
+        modalityAnalysis: "Modality analysis",
+        recommendations: "Recommendations"
       };
     }
     return {
@@ -900,7 +920,11 @@
       auditRunId: "审计 run_id",
       durationMs: "耗时",
       toolIterations: "工具轮次",
-      metaRoundPrefix: "轮次 "
+      metaRoundPrefix: "轮次 ",
+      riskLevel: "风险等级",
+      reasoning: "推理依据",
+      modalityAnalysis: "模态分析",
+      recommendations: "处置建议"
     };
   }
 
@@ -1054,6 +1078,8 @@
       lines.push(chrome.violationTypes + ": " + cats.join(chrome.sepTypes));
     }
     if (parsed.confidence != null) lines.push(chrome.confidence + ": " + parsed.confidence);
+    var riskLvl = (parsed.risk_level != null ? String(parsed.risk_level).trim() : "");
+    if (riskLvl) lines.push(chrome.riskLevel + ": " + riskLevelLabel(riskLvl));
     var capability = capabilityStatusText(parsed);
     if (capability) lines.push(chrome.capability + ": " + capability);
     var summary = (parsed.summary != null ? String(parsed.summary).trim() : "");
@@ -1061,6 +1087,29 @@
       lines.push("");
       lines.push(chrome.summary + ":");
       lines.push(summary);
+    }
+    var reasoning = (parsed.reasoning != null ? String(parsed.reasoning).trim() : "");
+    if (reasoning) {
+      lines.push("");
+      lines.push(chrome.reasoning + ":");
+      lines.push(reasoning);
+    }
+    var modality = parsed.modality_analysis;
+    if (modality && typeof modality === "object" && !Array.isArray(modality)) {
+      var mkeys = Object.keys(modality);
+      if (mkeys.length) {
+        lines.push("");
+        lines.push(chrome.modalityAnalysis + ":");
+        for (var mi = 0; mi < mkeys.length; mi++) {
+          lines.push("  · " + mkeys[mi] + ": " + String(modality[mkeys[mi]] || ""));
+        }
+      }
+    }
+    var recom = (parsed.recommendations != null ? String(parsed.recommendations).trim() : "");
+    if (recom) {
+      lines.push("");
+      lines.push(chrome.recommendations + ":");
+      lines.push(recom);
     }
     var viol = parsed.violations;
     if (Array.isArray(viol) && viol.length) {
@@ -1104,6 +1153,11 @@
     if (parsed.confidence != null) {
       html += '<div class="report-block"><h3>' + escapeHtml(rchrome.confidence) + "</h3><p class=\"summary-text\">" + escapeHtml(String(parsed.confidence)) + "</p></div>";
     }
+    var riskLvl = (parsed.risk_level != null ? String(parsed.risk_level).trim().toLowerCase() : "");
+    if (riskLvl) {
+      html += '<div class="report-block"><h3>' + escapeHtml(rchrome.riskLevel) + '</h3>';
+      html += '<span class="risk-badge risk-' + escapeHtml(riskLvl) + '">' + escapeHtml(riskLevelLabel(riskLvl)) + '</span></div>';
+    }
     var capability = capabilityStatusText(parsed);
     if (capability) {
       html += '<div class="report-block"><h3>' + escapeHtml(rchrome.capability) + "</h3><p class=\"summary-text\">" + escapeHtml(capability) + "</p></div>";
@@ -1111,6 +1165,27 @@
     var summary = (parsed.summary != null ? String(parsed.summary).trim() : "");
     if (summary) {
       html += '<div class="report-block"><h3>' + escapeHtml(rchrome.summary) + "</h3><p class=\"summary-text\">" + escapeHtml(summary) + "</p></div>";
+    }
+    var reasoning = (parsed.reasoning != null ? String(parsed.reasoning).trim() : "");
+    if (reasoning) {
+      html += '<div class="report-block"><h3>' + escapeHtml(rchrome.reasoning) + '</h3><p class="summary-text">' + escapeHtml(reasoning) + '</p></div>';
+    }
+    var modality = parsed.modality_analysis;
+    if (modality && typeof modality === "object" && !Array.isArray(modality)) {
+      var mkeys = Object.keys(modality);
+      if (mkeys.length) {
+        html += '<div class="report-block"><h3>' + escapeHtml(rchrome.modalityAnalysis) + '</h3><ul class="modality-list">';
+        for (var mi = 0; mi < mkeys.length; mi++) {
+          var mk = mkeys[mi];
+          var mv = String(modality[mk] || "");
+          html += '<li><strong>' + escapeHtml(mk) + '</strong><span>' + escapeHtml(mv) + '</span></li>';
+        }
+        html += '</ul></div>';
+      }
+    }
+    var recom = (parsed.recommendations != null ? String(parsed.recommendations).trim() : "");
+    if (recom) {
+      html += '<div class="report-block"><h3>' + escapeHtml(rchrome.recommendations) + '</h3><p class="summary-text">' + escapeHtml(recom) + '</p></div>';
     }
     var viol = parsed.violations;
     if (Array.isArray(viol) && viol.length) {

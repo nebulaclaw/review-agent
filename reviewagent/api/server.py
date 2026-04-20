@@ -163,6 +163,10 @@ async def _lifespan(app: FastAPI):
     if p is not None:
         log.info("reviewagent file log: %s", p)
 
+    from reviewagent.observability import tracing
+
+    tracing.configure(settings)
+
     from reviewagent.review_queue.service import ReviewQueueService
 
     from reviewagent.agent import review_job_runner

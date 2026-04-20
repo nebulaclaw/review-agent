@@ -183,6 +183,14 @@ def _report_chrome(locale: str) -> dict[str, str]:
             "violations": "Violations",
             "more_hidden": "… {n} more not shown",
             "sep_types": ", ",
+            "risk_level": "Risk level",
+            "risk_none": "None",
+            "risk_low": "Low",
+            "risk_medium": "Medium",
+            "risk_high": "High",
+            "reasoning": "Reasoning",
+            "modality_analysis": "Modality analysis",
+            "recommendations": "Recommendations",
         }
     return {
         "verdict": "审核结果",
@@ -193,6 +201,14 @@ def _report_chrome(locale: str) -> dict[str, str]:
         "violations": "违规项",
         "more_hidden": "… 另有 {n} 条未显示",
         "sep_types": "、",
+        "risk_level": "风险等级",
+        "risk_none": "无",
+        "risk_low": "低",
+        "risk_medium": "中",
+        "risk_high": "高",
+        "reasoning": "推理依据",
+        "modality_analysis": "模态分析",
+        "recommendations": "处置建议",
     }
 
 
@@ -216,6 +232,11 @@ def format_review_body(response: str) -> str:
     violations = violations_for_report_display(data.get("violations") or [])
     data_labels = {**data, "violations": violations}
 
+    risk_level = (data.get("risk_level") or "").strip().lower()
+    reasoning = (data.get("reasoning") or "").strip()
+    modality: dict = data.get("modality_analysis") or {}
+    recommendations = (data.get("recommendations") or "").strip()
+
     lines: list[str] = []
     lines.append(f"{chrome['verdict']}: {verdict}")
     cats = compute_violation_type_labels(data_labels, locale=loc)
@@ -225,10 +246,26 @@ def format_review_body(response: str) -> str:
         lines.append(f"{chrome['violation_types']}: {chrome['none']}")
     if conf is not None:
         lines.append(f"{chrome['confidence']}: {conf}")
+    if risk_level:
+        risk_label = chrome.get(f"risk_{risk_level}", risk_level)
+        lines.append(f"{chrome['risk_level']}: {risk_label}")
     if summary:
         lines.append("")
         lines.append(f"{chrome['summary']}:")
         lines.append(summary)
+    if reasoning:
+        lines.append("")
+        lines.append(f"{chrome['reasoning']}:")
+        lines.append(reasoning)
+    if isinstance(modality, dict) and modality:
+        lines.append("")
+        lines.append(f"{chrome['modality_analysis']}:")
+        for k, v in modality.items():
+            lines.append(f"  · {k}: {v}")
+    if recommendations:
+        lines.append("")
+        lines.append(f"{chrome['recommendations']}:")
+        lines.append(recommendations)
     if violations:
         lines.append("")
         lines.append(f"{chrome['violations']} ({len(violations)}):")
